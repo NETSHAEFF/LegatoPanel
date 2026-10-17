@@ -25,7 +25,8 @@ from .tor import (
     check_tor_connection,
     auto_detect_tor_port,
     TorRoutingError,
-    get_tor_proxy_url
+    get_tor_proxy_url,
+    tor_manager
 )
 from .storage import (
     get_all_accounts,
@@ -491,21 +492,41 @@ async def update_tor_configuration(req: TorConfigRequest):
 @app.get("/api/tor/status")
 async def get_tor_status():
     cfg = get_tor_config()
-    port = cfg.get("port", 9150)
+    detected = auto_detect_tor_port()
+    port = cfg.get("port") or detected or 9050
     status = check_tor_connection(port=port)
+    service_status = tor_manager.get_status()
     return {
         "success": True,
         "tor_enabled": cfg.get("enabled", True),
         "tor_strict": cfg.get("strict", True),
-        "status": status
+        "status": status,
+        "service": service_status
     }
+
+@app.get("/api/tor/service/status")
+async def get_tor_service_status():
+    return {
+        "success": True,
+        "service": tor_manager.get_status()
+    }
+
+@app.post("/api/tor/service/start")
+async def start_tor_service_endpoint():
+    res = tor_manager.start(port=9050)
+    return res
+
+@app.post("/api/tor/service/stop")
+async def stop_tor_service_endpoint():
+    res = tor_manager.stop()
+    return res
 
 @app.post("/api/tor/test")
 async def test_tor_connection_endpoint(req: TorTestRequest):
     port = req.port
     if not port:
         cfg = get_tor_config()
-        port = cfg.get("port", 9150)
+        port = cfg.get("port") or auto_detect_tor_port() or 9050
     status = check_tor_connection(port=port)
     return {
         "success": status.get("connected", False),
@@ -523,7 +544,7 @@ async def detect_tor_port_endpoint():
         }
     return {
         "success": False,
-        "error": "Активный процесс Tor не обнаружен на стандартных портах 9150 / 9050"
+        "error": "Активный процесс Tor не обнаружен на стандартных портах 9050 / 9150"
     }
 
 # Anti-detect & Proxies

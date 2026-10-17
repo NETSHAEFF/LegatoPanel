@@ -434,6 +434,8 @@ function initEventListeners() {
         }
     });
 
+    document.getElementById("btnStartStandaloneTor")?.addEventListener("click", startStandaloneTor);
+    document.getElementById("btnStopStandaloneTor")?.addEventListener("click", stopStandaloneTor);
     document.getElementById("btnDetectTorPort")?.addEventListener("click", detectTorPort);
     document.getElementById("btnTestTorCircuit")?.addEventListener("click", testTorCircuit);
     document.getElementById("btnSaveTorSettings")?.addEventListener("click", saveTorSettings);
@@ -666,6 +668,33 @@ async function loadTorStatus() {
         const res = await fetch("/api/tor/status");
         const data = await res.json();
         const st = data.status || {};
+        const svc = data.service || {};
+        const modeVal = document.getElementById("torModeValue");
+        const btnStart = document.getElementById("btnStartStandaloneTor");
+        const btnStop = document.getElementById("btnStopStandaloneTor");
+
+        if (modeVal) {
+            if (svc.managed_by_panel) {
+                modeVal.textContent = `Автономный (PID: ${svc.pid})`;
+                modeVal.style.color = "var(--accent-green)";
+            } else if (st.connected) {
+                modeVal.textContent = st.port === 9150 ? "Tor Browser" : "Фоновая служба";
+                modeVal.style.color = "var(--accent-cyan)";
+            } else {
+                modeVal.textContent = "Не запущен";
+                modeVal.style.color = "var(--accent-red)";
+            }
+        }
+
+        if (btnStart && btnStop) {
+            if (svc.managed_by_panel) {
+                btnStart.style.display = "none";
+                btnStop.style.display = "inline-flex";
+            } else {
+                btnStart.style.display = "inline-flex";
+                btnStop.style.display = "none";
+            }
+        }
 
         if (st.connected) {
             if (chipDot) chipDot.className = "tor-dot active";
@@ -694,7 +723,7 @@ async function loadTorStatus() {
                 isTorVal.style.color = "var(--accent-red)";
                 isTorVal.textContent = "Нет связи";
             }
-            if (portVal) portVal.textContent = `127.0.0.1:${st.port || 9150}`;
+            if (portVal) portVal.textContent = `127.0.0.1:${st.port || 9050}`;
             if (latencyVal) latencyVal.textContent = "-";
         }
     } catch (err) {
@@ -744,6 +773,53 @@ async function testTorCircuit() {
                 Проверить цепь Tor
             `;
         }
+    }
+}
+
+async function startStandaloneTor() {
+    const btn = document.getElementById("btnStartStandaloneTor");
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Запуск Tor...";
+    }
+    try {
+        const res = await fetch("/api/tor/service/start", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("🧅 Автономный Tor успешно запущен в фоне (без браузера)!", "success");
+            loadTorStatus();
+        } else {
+            showToast(data.error || "Не удалось запустить Tor", "error");
+        }
+    } catch (err) {
+        showToast("Ошибка запуска Tor: " + err.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Запустить Tor в фоне
+            `;
+        }
+    }
+}
+
+async function stopStandaloneTor() {
+    const btn = document.getElementById("btnStopStandaloneTor");
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch("/api/tor/service/stop", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.message || "Фоновый Tor остановлен", "info");
+            loadTorStatus();
+        }
+    } catch (err) {
+        showToast("Ошибка остановки Tor: " + err.message, "error");
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 

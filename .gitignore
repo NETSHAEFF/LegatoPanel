@@ -25,6 +25,7 @@ videos/*
 # Logs & temp files
 *.log
 *.tmp
+*.pid
 .cache/
 
 # IDE / Editor settings

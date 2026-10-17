@@ -32,15 +32,21 @@ def main():
     selected_port = find_available_port(PORT, HOST)
     panel_url = f"http://{HOST}:{selected_port}"
 
-    from backend.tor import auto_detect_tor_port, check_tor_connection
+    from backend.tor import auto_detect_tor_port, check_tor_connection, tor_manager
     detected_tor = auto_detect_tor_port()
-    tor_info_str = "НЕ ОБНАРУЖЕН на 9150/9050 (Запустите Tor Browser)"
+    if not detected_tor:
+        print("[*] 🧅 Запуск автономного фонового Tor (без запуска браузера)...")
+        tor_manager.ensure_running(port=9050)
+        detected_tor = auto_detect_tor_port()
+
+    tor_info_str = "НЕ ОБНАРУЖЕН на 9050/9150"
     if detected_tor:
-        st = check_tor_connection(port=detected_tor, timeout=4)
+        st = check_tor_connection(port=detected_tor, timeout=6)
         if st.get("connected"):
-            tor_info_str = f"ПОДКЛЮЧЕНО (Exit IP: {st.get('ip')}, порт: {detected_tor}, 0 DNS leak)"
+            mode_str = "Автономный фоновый" if detected_tor == 9050 else "Tor Browser"
+            tor_info_str = f"ПОДКЛЮЧЕНО [{mode_str}] (Exit IP: {st.get('ip')}, порт: {detected_tor}, 0 DNS leak)"
         else:
-            tor_info_str = f"Порт {detected_tor} открыт, ожидание цепи Tor..."
+            tor_info_str = f"Порт {detected_tor} открыт, построение цепи Tor..."
 
     print("=" * 65)
     print(" 🚀 WVIDS STUDIO PRO — ANTI-DETECT & VIDEO AUTOMATION PANEL")
@@ -61,13 +67,17 @@ def main():
         pass
 
     # Run Uvicorn server
-    uvicorn.run(
-        "backend.app:app",
-        host=HOST,
-        port=selected_port,
-        reload=False,
-        log_level="info"
-    )
+    try:
+        uvicorn.run(
+            "backend.app:app",
+            host=HOST,
+            port=selected_port,
+            reload=False,
+            log_level="info"
+        )
+    finally:
+        print("\n[*] Завершение работы Wvids Studio Pro и фоновых служб Tor...")
+        tor_manager.stop()
 
 if __name__ == "__main__":
     main()

@@ -31,7 +31,8 @@ from .tor import (
     get_tor_proxy_url,
     auto_detect_tor_port,
     TorRoutingError,
-    is_port_open
+    is_port_open,
+    tor_manager
 )
 from .storage import add_log, get_tor_config
 
@@ -52,7 +53,7 @@ class WvidsClient:
         # Check Tor mode: defaults to database setting (enabled by default)
         tor_cfg = get_tor_config()
         self.use_tor = tor_cfg.get("enabled", True) if use_tor is None else use_tor
-        self.tor_port = tor_cfg.get("port", 9150)
+        self.tor_port = tor_cfg.get("port", 9050)
         self.tor_strict = tor_cfg.get("strict", True)
 
     def _get_proxies_dict(self) -> Optional[Dict[str, str]]:
@@ -63,13 +64,18 @@ class WvidsClient:
                 detected = auto_detect_tor_port()
                 if detected:
                     active_port = detected
-                elif self.tor_strict:
-                    msg = (
-                        f"🧅 [TOR BLOCKED] Tor не запущен на порту {self.tor_port} (или 9050/9150). "
-                        "Включен строгий режим защиты от утечки IP. Запустите Tor Browser."
-                    )
-                    add_log("ERROR", msg)
-                    raise TorRoutingError(msg)
+                else:
+                    # Auto-start headless Tor in background!
+                    add_log("INFO", "🧅 Попытка автоматического запуска автономного фонового Tor...")
+                    if tor_manager.ensure_running(port=active_port or 9050):
+                        active_port = tor_manager.get_status().get("port", 9050)
+                    elif self.tor_strict:
+                        msg = (
+                            f"🧅 [TOR BLOCKED] Не удалось запустить Tor на порту {active_port or 9050}. "
+                            "Включен строгий режим защиты от утечки IP."
+                        )
+                        add_log("ERROR", msg)
+                        raise TorRoutingError(msg)
 
             tor_url = f"socks5h://127.0.0.1:{active_port}"
             return {

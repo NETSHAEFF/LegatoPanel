@@ -44,8 +44,8 @@ DEFAULT_FINGERPRINT = "chrome124"
 # Tor Routing Configuration (socks5h for 0 DNS leak)
 TOR_ENABLED = True
 TOR_HOST = "127.0.0.1"
-TOR_DEFAULT_PORT = 9150   # Tor Browser default port
-TOR_FALLBACK_PORT = 9050  # Tor Expert / Service port
+TOR_DEFAULT_PORT = 9050   # Standalone Headless Tor service port
+TOR_FALLBACK_PORT = 9150  # Tor Browser port
 TOR_STRICT_MODE = True    # Blocks non-Tor traffic to prevent real IP leaks
 
 # Standard Web Panel Server Settings

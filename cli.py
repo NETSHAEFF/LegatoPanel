@@ -18,7 +18,7 @@ from backend.storage import get_active_account, save_account, update_account_sta
 from backend.client import WvidsClient
 from backend.uploader import ContentUploader
 from backend.fingerprint import parse_cookies_input
-from backend.tor import check_tor_connection, auto_detect_tor_port
+from backend.tor import check_tor_connection, auto_detect_tor_port, tor_manager
 from backend.batch_worker import batch_worker
 
 def get_client() -> WvidsClient:
@@ -26,6 +26,7 @@ def get_client() -> WvidsClient:
     if not active:
         print("[!] Ошибка: Нет активного сохраненного аккаунта. Сначала выполните: python cli.py login --cookies \"...\"")
         sys.exit(1)
+    tor_manager.ensure_running(port=9050)
     return WvidsClient(
         cookies=active.get("cookies", {}),
         fingerprint=active.get("fingerprint", "chrome124"),
@@ -77,22 +78,58 @@ async def cmd_batch(args):
         print("[+] Очередь остановлена.")
 
 async def cmd_tor(args):
+    action = getattr(args, "action", "status")
+    if action == "start":
+        print("[*] 🧅 Запуск автономного фонового Tor (без браузера)...")
+        res = tor_manager.start(port=args.port or 9050)
+        if res.get("success"):
+            print(f"[+] {res.get('message', 'Tor успешно запущен')}")
+            st = check_tor_connection(port=args.port or 9050)
+            if st.get("connected"):
+                print(f"[+] 🌐 Выходной Tor IP: {st.get('ip')}")
+            print(f"[*] Для удержания службы нажмите Ctrl+C для выхода.")
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print("\n[*] Остановка Tor...")
+                tor_manager.stop()
+                print("[+] Служба Tor остановлена.")
+        else:
+            print(f"[!] {res.get('error', 'Ошибка запуска Tor')}")
+        return
+    elif action == "stop":
+        print("[*] 🧅 Остановка фонового Tor...")
+        res = tor_manager.stop()
+        print(f"[+] {res.get('message')}")
+        return
+
     print("[*] Проверка подключения к сети Tor (без DNS-утечек)...")
-    port = args.port or auto_detect_tor_port() or 9150
+    detected = auto_detect_tor_port()
+    if not detected:
+        print("[*] Tor не обнаружен. Автоматический запуск автономного Tor в фоне...")
+        tor_manager.ensure_running(port=args.port or 9050)
+        detected = auto_detect_tor_port()
+
+    port = args.port or detected or 9050
     status = check_tor_connection(port=port)
-    print("=" * 50)
+    mgr_status = tor_manager.get_status()
+    mode = "Автономный фоновый" if (mgr_status.get("managed_by_panel") or port == 9050) else "Tor Browser"
+
+    print("=" * 55)
     if status.get("connected"):
-        print(" 🧅 Tor Сеть:           ПОДКЛЮЧЕНО (Активна)")
+        print(f" 🧅 Tor Сеть:           ПОДКЛЮЧЕНО ({mode})")
         print(f" 🌐 Выходной IP (Exit): {status.get('ip')}")
         print(f" 🛡️  Подтвержден как Tor: {'ДА (Tor Exit Node)' if status.get('is_tor') else 'НЕТ'}")
         print(f" 🔌 Локальный порт SOCKS: {status.get('port')}")
+        if mgr_status.get("pid"):
+            print(f" ⚙️  PID процесса:       {mgr_status.get('pid')}")
         print(f" ⏱️  Задержка цепи:     {status.get('latency_ms')} мс")
         print(f" 🔒 DNS Резолвинг:      Удаленный (Zero-Leak via socks5h://)")
     else:
         print(" 🧅 Tor Сеть:           ОТКЛЮЧЕНО / ОШИБКА")
         print(f" [!] {status.get('error')}")
-        print(" [!] Запустите Tor Browser или фоновую службу Tor.")
-    print("=" * 50)
+    print("=" * 55)
 
 async def cmd_login(args):
     cookies_dict = parse_cookies_input(args.cookies)
@@ -253,9 +290,10 @@ def main():
     p_batch.add_argument("--title", "-t", default="", help="Шаблон заголовка (можно использовать {name})")
     p_batch.add_argument("--desc", "-d", default="", help="Кастомное описание видео")
 
-    # Tor Status
-    p_tor = subparsers.add_parser("tor", help="Проверка статуса подключения к сети Tor")
-    p_tor.add_argument("--port", "-p", type=int, default=None, help="Порт SOCKS Tor (по умолчанию авто 9150/9050)")
+    # Tor Status & Control
+    p_tor = subparsers.add_parser("tor", help="Проверка статуса и управление автономным Tor")
+    p_tor.add_argument("action", nargs="?", choices=["status", "start", "stop"], default="status", help="Действие: status, start, stop (по умолчанию: status)")
+    p_tor.add_argument("--port", "-p", type=int, default=None, help="Порт SOCKS Tor (по умолчанию: 9050)")
 
     # Scan Posts
     p_scan = subparsers.add_parser("scan", help="Сканировать все публикации канала (page=1, 2, 3...)")

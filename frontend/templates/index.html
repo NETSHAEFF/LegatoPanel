@@ -746,7 +746,19 @@
                                 </p>
                             </div>
                         </div>
-                        <div style="display: flex; gap: 0.6rem;">
+                        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
+                            <button class="btn btn-sm" id="btnStartStandaloneTor" style="background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399;">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                Запустить Tor в фоне
+                            </button>
+                            <button class="btn btn-sm" id="btnStopStandaloneTor" style="display: none; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171;">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="6" y="6" width="12" height="12"></rect>
+                                </svg>
+                                Остановить Tor
+                            </button>
                             <button class="btn btn-secondary btn-sm" id="btnDetectTorPort">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <circle cx="12" cy="12" r="10"></circle>
@@ -793,14 +805,14 @@
                         <div class="tor-metric-item">
                             <div class="tor-metric-title">Порт Tor SOCKS5</div>
                             <div class="tor-metric-value" id="torActivePortValue">
-                                127.0.0.1:9150
+                                127.0.0.1:9050
                             </div>
                         </div>
 
                         <div class="tor-metric-item">
-                            <div class="tor-metric-title">Задержка цепи</div>
-                            <div class="tor-metric-value" id="torLatencyValue" style="color: #cbd5e1;">
-                                ~1.6 с
+                            <div class="tor-metric-title">Режим работы Tor</div>
+                            <div class="tor-metric-value" id="torModeValue" style="color: var(--accent-cyan); font-size: 0.95rem;">
+                                Автономный (без браузера)
                             </div>
                         </div>
 
@@ -817,8 +829,8 @@
                         <div style="flex: 1; min-width: 200px;">
                             <label class="form-label" style="margin-bottom: 0.4rem;">Порт Tor SOCKS5</label>
                             <select class="form-select" id="torPortSelect">
-                                <option value="9150">9150 (Tor Browser на ПК — Рекомендуется)</option>
-                                <option value="9050">9050 (Tor Фоновая служба / Expert Bundle)</option>
+                                <option value="9050">9050 (Автономный фоновый Tor — Без браузера!)</option>
+                                <option value="9150">9150 (Tor Browser на ПК)</option>
                                 <option value="custom">Указать другой порт...</option>
                             </select>
                         </div>
