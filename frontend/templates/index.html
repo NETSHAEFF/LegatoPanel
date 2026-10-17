@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wvids Panel — Anti-Detect & Video Automation</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <!-- Chart.js local -->
+    <script src="/static/js/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sticky Header -->
+        <header class="app-header">
+            <div class="header-inner">
+                <div class="brand-section">
+                    <div class="brand-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="brand-title">Wvids Studio <span class="brand-badge">Stealth</span></div>
+                    </div>
+                </div>
+
+                <div class="header-account-status">
+                    <!-- Tor Routing Badge -->
+                    <div class="tor-chip" id="headerTorChip" title="Статус Tor сети (кликните для настроек)">
+                        <span class="tor-dot" id="headerTorDot"></span>
+                        <span style="font-size: 0.95rem;">🧅</span>
+                        <span id="headerTorStatusText">Tor: Проверка...</span>
+                    </div>
+
+                    <div class="account-chip" id="headerAccountChip">
+                        <span class="status-dot" id="headerStatusDot"></span>
+                        <span id="headerUsername">Не авторизован</span>
+                        <span id="headerUid" style="color: var(--text-muted); font-size: 0.75rem;"></span>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" id="btnRefreshStats" title="Обновить статистику">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <polyline points="1 20 1 14 7 14"></polyline>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                        Обновить
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Wrapper -->
+        <main class="main-wrapper">
+            <!-- Navigation Tabs -->
+            <nav class="nav-tabs">
+                <button class="tab-btn active" data-tab="tab-dashboard">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="9"></rect>
+                        <rect x="14" y="3" width="7" height="5"></rect>
+                        <rect x="14" y="12" width="7" height="9"></rect>
+                        <rect x="3" y="16" width="7" height="5"></rect>
+                    </svg>
+                    Статистика & Обзор
+                </button>
+                <button class="tab-btn" data-tab="tab-upload">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    ⚡ Авто-выгрузка /videos
+                </button>
+                <button class="tab-btn" data-tab="tab-redact">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                    ✏️ Редактор всех постов
+                </button>
+                <button class="tab-btn" data-tab="tab-account">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                    Смена никнейма
+                </button>
+                <button class="tab-btn" data-tab="tab-auth">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    Куки & Аккаунты
+                </button>
+                <button class="tab-btn" data-tab="tab-antidetect">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                    🧅 Tor Сеть & Защита
+                </button>
+                <button class="tab-btn" data-tab="tab-logs">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5"></polyline>
+                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                    </svg>
+                    Журнал событий
+                </button>
+            </nav>
+
+            <!-- TAB 1: DASHBOARD & STATS -->
+            <section id="tab-dashboard" class="tab-content active">
+                <!-- Stat Cards Grid -->
+                <div class="grid-4" style="margin-bottom: 1.5rem;">
+                    <div class="stat-card">
+                        <div class="stat-icon purple">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="9" cy="7" r="4"></circle>
+                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statSubscribers">0</div>
+                            <div class="stat-label">Подписчики</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon cyan">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statViewsToday">0</div>
+                            <div class="stat-label">Просмотры за сегодня</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon green">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statTotalViews">0</div>
+                            <div class="stat-label">Всего просмотров</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon amber">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statUploadsCount">0</div>
+                            <div class="stat-label">Успешных загрузок</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Views Dynamics Chart -->
+                <div class="card" style="margin-bottom: 1.5rem;">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                <line x1="18" y1="20" x2="18" y2="10"></line>
+                                <line x1="12" y1="20" x2="12" y2="4"></line>
+                                <line x1="6" y1="20" x2="6" y2="14"></line>
+                            </svg>
+                            График просмотров по дням (Chart.js)
+                        </div>
+                        <span id="chartStatusText" style="font-size: 0.8rem; color: var(--text-muted);">Актуальные данные с wvids.com</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="viewsChartCanvas"></canvas>
+                    </div>
+                </div>
+
+                <!-- Recent Uploads Table -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 14 14"></polyline>
+                            </svg>
+                            Последние выложенные материалы
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Имя / Название</th>
+                                    <th>Файл</th>
+                                    <th>Размер</th>
+                                    <th>FID wvids</th>
+                                    <th>Статус</th>
+                                    <th>Дата</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recentUploadsTableBody">
+                                <tr>
+                                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                                        Нет записей о загрузках
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: BATCH AUTO-PUBLISHER & UPLOAD -->
+            <section id="tab-upload" class="tab-content">
+                <!-- Batch Auto-Publisher Top Card -->
+                <div class="tor-status-card" style="margin-bottom: 1.5rem; background: linear-gradient(135deg, rgba(6, 182, 212, 0.08), rgba(139, 92, 246, 0.06)); border-color: rgba(6, 182, 212, 0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">
+                        <div style="display: flex; align-items: center; gap: 0.8rem;">
+                            <div style="font-size: 2rem;">⚡</div>
+                            <div>
+                                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin-bottom: 0.2rem;">
+                                    Автоматическая публикация очереди видео из папки
+                                </h2>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">
+                                    Поочередная выгрузка пачки видео из папки <code style="color: var(--accent-cyan);">/videos</code> через Tor сеть. При ошибке <code>This file already exists</code> дубликат пропускается <strong>мгновенно без пауз</strong>, а после успешной публикации выдерживается настраиваемый интервал.
+                                </p>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.6rem;">
+                            <button class="btn btn-secondary btn-sm" id="btnRefreshBatchFiles">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <polyline points="1 20 1 14 7 14"></polyline>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                                Сканировать папку
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Batch Progress & Metrics -->
+                    <div class="tor-metrics-grid" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));">
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Статус очереди</div>
+                            <div class="tor-metric-value" id="batchStatusText" style="color: var(--accent-cyan); font-size: 0.95rem;">
+                                Ожидание запуска
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Всего видео в папке</div>
+                            <div class="tor-metric-value" id="batchTotalCount">0</div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Успешно выложено</div>
+                            <div class="tor-metric-value" id="batchSuccessCount" style="color: var(--accent-green);">0</div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Пропущено дубликатов</div>
+                            <div class="tor-metric-value" id="batchDuplicateCount" style="color: var(--accent-amber);">0</div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Таймер паузы</div>
+                            <div class="tor-metric-value" id="batchCountdownTimer" style="color: #fff;">00:00</div>
+                        </div>
+                    </div>
+
+                    <!-- Live Message Box -->
+                    <div id="batchMessageBox" style="margin-top: 1rem; padding: 0.75rem 1rem; background: rgba(0,0,0,0.25); border-radius: var(--radius-sm); font-size: 0.85rem; color: #cbd5e1; border-left: 3px solid var(--accent-cyan);">
+                        Папка: <code id="batchFolderLabel">videos</code> — нажмите «Запустить публикацию очереди» для старта.
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <!-- Batch Settings Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                                </svg>
+                                Параметры очереди и метаданных
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Папка с видео (внутри проекта или полный путь)</label>
+                            <input type="text" class="form-input" id="batchFolderInput" value="videos" placeholder="videos или C:\Coding\LegatoPanel\videos">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Кастомное имя / заголовок (Title)</label>
+                            <input type="text" class="form-input" id="batchTitleInput" placeholder="Мое видео #{index} (или оставьте имя файла: {name})">
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">
+                                Можно использовать теги <code>{name}</code> (имя файла) или <code>{index}</code> (порядковый номер).
+                            </span>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Кастомное описание (Description для всех видео)</label>
+                            <textarea class="form-textarea" id="batchDescInput" rows="4" placeholder="Введите общее описание для выгружаемых роликов, хэштеги, ссылки..."></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Интервал паузы между успешными публикациями (минуты)</label>
+                            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                <input type="number" class="form-input" id="batchIntervalInput" value="5" min="0.1" step="0.5" style="width: 120px;">
+                                <span style="font-size: 0.85rem; color: var(--text-muted);">минут (по умолчанию 5 мин)</span>
+                            </div>
+                            <span style="font-size: 0.75rem; color: var(--accent-green); margin-top: 0.3rem; display: block;">
+                                ⚡ Если сервер возвращает "This file already exists", пауза НЕ выдерживается — сразу берется следующее видео!
+                            </span>
+                        </div>
+
+                        <div style="display: flex; gap: 0.8rem; margin-top: 1.25rem;">
+                            <button class="btn btn-primary" id="btnStartBatch" style="flex: 1;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                Запустить публикацию очереди
+                            </button>
+                            <button class="btn btn-danger" id="btnStopBatch" style="display: none;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="6" y="6" width="12" height="12"></rect>
+                                </svg>
+                                Остановить
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Single Upload Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                Одиночная ручная выгрузка файла
+                            </div>
+                        </div>
+
+                        <!-- Dropzone for browser upload -->
+                        <div class="dropzone" id="uploadDropzone">
+                            <input type="file" id="browserFileInput" style="display: none;" accept="video/*,image/*">
+                            <div class="dropzone-icon">📁</div>
+                            <div class="dropzone-text">Перетащите видео или фото сюда, или нажмите для выбора</div>
+                            <div class="dropzone-sub">Поддерживаются MP4, WEBM, MOV, JPG, PNG, WEBP (до 300 МБ)</div>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 1rem;">
+                            <label class="form-label">Или прямой путь к файлу на ПК</label>
+                            <input type="text" class="form-input" id="localFilePathInput" placeholder="C:\Coding\LegatoPanel\videos\sample.mp4">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Название (Title)</label>
+                            <input type="text" class="form-input" id="uploadTitleInput" placeholder="Одиночный ролик">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Описание (Description)</label>
+                            <textarea class="form-textarea" id="uploadDescInput" rows="2" placeholder="Описание для этого видео..."></textarea>
+                        </div>
+
+                        <button class="btn btn-secondary" id="btnStartUpload" style="width: 100%;">
+                            Выложить одиночный файл
+                        </button>
+
+                        <div class="progress-container" id="uploadProgressContainer" style="margin-top: 1rem;">
+                            <div class="progress-header">
+                                <span id="uploadStatusText">Подготовка к отправке...</span>
+                                <span id="uploadPercentText">0%</span>
+                            </div>
+                            <div class="progress-track">
+                                <div class="progress-fill" id="uploadProgressFill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Video Files in Folder Table -->
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                                <line x1="7" y1="2" x2="7" y2="22"></line>
+                                <line x1="17" y1="2" x2="17" y2="22"></line>
+                                <line x1="2" y1="12" x2="22" y2="12"></line>
+                                <line x1="2" y1="7" x2="7" y2="7"></line>
+                                <line x1="2" y1="17" x2="7" y2="17"></line>
+                                <line x1="17" y1="17" x2="22" y2="17"></line>
+                                <line x1="17" y1="7" x2="22" y2="7"></line>
+                            </svg>
+                            Список файлов в папке <span id="folderTitleBadge" style="font-family: monospace; color: var(--accent-cyan);">videos/</span>
+                        </div>
+                    </div>
+
+                    <div style="overflow-x: auto; max-height: 420px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Имя файла</th>
+                                    <th>Размер</th>
+                                    <th>Формат</th>
+                                    <th>Статус в очереди</th>
+                                </tr>
+                            </thead>
+                            <tbody id="batchFilesTableBody">
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                                        Загрузка списка файлов...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: BULK REDACT POSTS (ALL PAGES PAGINATION) -->
+            <section id="tab-redact" class="tab-content">
+                <div class="grid-2">
+                    <!-- Left Column: Controls & Inputs -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                </svg>
+                                Массовое редактирование прошлых публикаций
+                            </div>
+                        </div>
+
+                        <div class="alert-box" style="margin-bottom: 1.25rem; display: flex; gap: 0.75rem; align-items: flex-start; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); padding: 0.9rem; border-radius: 8px;">
+                            <span style="font-size: 1.3rem;">🌐</span>
+                            <div style="font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">
+                                Сканирует все страницы канала (<strong>page=1, page=2, page=3, page=4...</strong>) и последовательно меняет имя/заголовок и описание у каждого видео или фото через безопасный Tor-канал с защитой от банов.
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">
+                                Новый заголовок / шаблон названия
+                                <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">
+                                    (теги: <code>{i}</code> - номер 1..N, <code>{title}</code> - старый заголовок)
+                                </span>
+                            </label>
+                            <input type="text" class="form-input" id="bulkRedactTitleInput" placeholder="Новое название для всех постов {i}">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">
+                                Новое описание (Description)
+                                <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">
+                                    (будет установлено для всех публикаций)
+                                </span>
+                            </label>
+                            <textarea class="form-textarea" id="bulkRedactDescInput" rows="4" placeholder="Введите новое кастомное описание..."></textarea>
+                        </div>
+
+                        <div class="btn-group" style="display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary" id="btnScanAllPosts" style="flex: 1; min-width: 180px;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                🔍 Сканировать все страницы
+                            </button>
+                            <button class="btn btn-primary" id="btnStartBulkRedact" style="flex: 1.2; min-width: 200px;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                ⚡ Применить ко всем постам
+                            </button>
+                            <button class="btn btn-danger" id="btnStopBulkRedact" style="display: none; min-width: 100px;">
+                                ⏹ Стоп
+                            </button>
+                        </div>
+
+                        <!-- Live Progress Bar -->
+                        <div class="progress-container" id="bulkRedactProgressContainer" style="margin-top: 1.25rem; display: none;">
+                            <div class="progress-header" style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px;">
+                                <span id="bulkRedactStatusText">Ожидание...</span>
+                                <span id="bulkRedactPercentText" style="font-weight: 600; font-family: monospace; color: var(--accent-cyan);">0%</span>
+                            </div>
+                            <div class="progress-track" style="height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); overflow: hidden;">
+                                <div class="progress-fill" id="bulkRedactProgressFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple)); transition: width 0.3s ease;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Channel Status & Summary -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2">
+                                    <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                                    <polyline points="2 17 12 22 22 17"></polyline>
+                                    <polyline points="2 12 12 17 22 12"></polyline>
+                                </svg>
+                                Сводка канала & Страницы
+                            </div>
+                        </div>
+
+                        <div class="grid-2" style="margin-bottom: 1.25rem;">
+                            <div class="metric-card" style="background: rgba(255, 255, 255, 0.03); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                                <div style="font-size: 0.8rem; color: var(--text-muted);">Всего найдено постов</div>
+                                <div style="font-size: 1.75rem; font-weight: 700; color: var(--accent-cyan); margin-top: 4px;" id="badgeTotalPostsCount">0</div>
+                            </div>
+                            <div class="metric-card" style="background: rgba(255, 255, 255, 0.03); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                                <div style="font-size: 0.8rem; color: var(--text-muted);">Страниц охвачено</div>
+                                <div style="font-size: 1.75rem; font-weight: 700; color: var(--accent-purple); margin-top: 4px;" id="badgeTotalPagesCount">0</div>
+                            </div>
+                        </div>
+
+                        <div style="font-size: 0.875rem; color: var(--text-secondary); line-height: 1.8;">
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding: 6px 0;">
+                                <span>Канал:</span>
+                                <strong id="redactChannelName" style="color: #fff;">-</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding: 6px 0;">
+                                <span>Видеороликов:</span>
+                                <span id="badgeVideosCount" style="color: var(--accent-green); font-weight: 600;">0</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding: 6px 0;">
+                                <span>Фотографий:</span>
+                                <span id="badgePhotosCount" style="color: var(--accent-cyan); font-weight: 600;">0</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 6px 0;">
+                                <span>Безопасный маршрут:</span>
+                                <span style="color: var(--accent-green);">🧅 Tor SOCKS5h (0 DNS-утечек)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table of Scanned Posts -->
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                        <div class="card-title">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                                <line x1="7" y1="2" x2="7" y2="22"></line>
+                                <line x1="17" y1="2" x2="17" y2="22"></line>
+                                <line x1="2" y1="12" x2="22" y2="12"></line>
+                            </svg>
+                            Все публикации канала (включая page=1, 2, 3, 4...)
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <input type="text" class="form-input" id="searchPostsFilter" placeholder="Фильтр по названию или ID..." style="padding: 0.4rem 0.8rem; font-size: 0.85rem; width: 240px;">
+                        </div>
+                    </div>
+
+                    <div style="overflow-x: auto; max-height: 480px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px;"><input type="checkbox" id="checkAllPosts" checked></th>
+                                    <th>#</th>
+                                    <th>ID</th>
+                                    <th>Стр.</th>
+                                    <th>Тип</th>
+                                    <th>Текущий заголовок</th>
+                                    <th>Просмотры</th>
+                                    <th>Ссылка</th>
+                                    <th>Статус обновления</th>
+                                </tr>
+                            </thead>
+                            <tbody id="postsTableBody">
+                                <tr>
+                                    <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                                        Нажмите кнопку «🔍 Сканировать все страницы», чтобы загрузить список публикаций с сайта.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: ACCOUNT & NICKNAME -->
+            <section id="tab-account" class="tab-content">
+                <div class="grid-2">
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="12" cy="7" r="4"></circle>
+                                </svg>
+                                Смена никнейма (Username)
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Текущий никнейм</label>
+                            <input type="text" class="form-input" id="currentNicknameInput" readonly style="opacity: 0.7;">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Новый никнейм (без символа @)</label>
+                            <input type="text" class="form-input" id="newNicknameInput" placeholder="НовоеИмяАккаунта">
+                        </div>
+
+                        <button class="btn btn-primary" id="btnChangeNickname">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            Сохранить новый никнейм
+                        </button>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2">
+                                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                                </svg>
+                                Ссылки аккаунта
+                            </div>
+                        </div>
+
+                        <div style="font-size: 0.9rem; line-height: 1.8; color: var(--text-secondary);">
+                            <div style="margin-bottom: 0.6rem;">
+                                <strong>Страница канала:</strong><br>
+                                <a id="profileChannelLink" href="https://wvids.com/" target="_blank" style="color: var(--accent-cyan); text-decoration: none;">
+                                    https://wvids.com/
+                                </a>
+                            </div>
+                            <div style="margin-bottom: 0.6rem;">
+                                <strong>UID в системе:</strong> <span id="profileUidText" style="color: #fff; font-family: monospace;">-</span>
+                            </div>
+                            <div>
+                                <strong>Защита пакетов:</strong> <span style="color: var(--accent-green);">Активна (эмуляция действий actionfingerprint)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: COOKIES & ACCOUNTS -->
+            <section id="tab-auth" class="tab-content">
+                <div class="grid-2">
+                    <!-- Add/Update Account Form -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                </svg>
+                                Авторизация по Куки (Cookies)
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Понятное название аккаунта (для себя)</label>
+                            <input type="text" class="form-input" id="authAccountName" placeholder="Основной аккаунт 1">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Значение Cookies (строка, JSON или Netscape)</label>
+                            <textarea class="form-textarea" id="authCookiesInput" rows="5" placeholder="auth_user_id=3195151; auth_sess=...; auth_p=..."></textarea>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">
+                                Обязательные куки: <code>auth_user_id</code>, <code>auth_sess</code> (и <code>auth_p</code> если есть). Скопируйте из DevTools браузера или расширения Cookie-Editor.
+                            </span>
+                        </div>
+
+                        <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #cbd5e1; display: flex; align-items: center; gap: 0.6rem;">
+                            <span style="font-size: 1.2rem;">🧅</span>
+                            <span>Маршрутизация: <strong>Вся работа строго через Tor</strong> (socks5h://127.0.0.1:9150, сторонние прокси отключены).</span>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Браузерный фингерпринт (TLS / HTTP2)</label>
+                            <select class="form-select" id="authFingerprintSelect">
+                                <option value="chrome124">Google Chrome 124 (Рекомендуется)</option>
+                                <option value="chrome120">Google Chrome 120</option>
+                                <option value="safari17_0">Apple Safari 17.0</option>
+                                <option value="edge101">Microsoft Edge 101</option>
+                            </select>
+                        </div>
+
+                        <button class="btn btn-primary" id="btnVerifySaveAccount">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                            </svg>
+                            Проверить и сохранить аккаунт
+                        </button>
+                    </div>
+
+                    <!-- Accounts List -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="9" cy="7" r="4"></circle>
+                                </svg>
+                                Сохраненные аккаунты
+                            </div>
+                        </div>
+
+                        <div id="accountsListContainer" style="display: flex; flex-direction: column; gap: 0.8rem;">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: TOR NETWORK & ANTI-DETECT -->
+            <section id="tab-antidetect" class="tab-content">
+                <!-- Tor Network Control Center -->
+                <div class="tor-status-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">
+                        <div style="display: flex; align-items: center; gap: 0.8rem;">
+                            <div style="font-size: 2rem;">🧅</div>
+                            <div>
+                                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin-bottom: 0.2rem;">
+                                    Tor Network Routing (Принудительная изоляция трафика)
+                                </h2>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">
+                                    Все запросы к wvids.com, серверам загрузки oakroot.top и API направляются строго через анонимную сеть Tor (<code style="color: var(--accent-cyan);">socks5h://</code>, 0 DNS-утечек).
+                                </p>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.6rem;">
+                            <button class="btn btn-secondary btn-sm" id="btnDetectTorPort">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                                </svg>
+                                Автопоиск порта
+                            </button>
+                            <button class="btn btn-primary btn-sm" id="btnTestTorCircuit">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <polyline points="1 20 1 14 7 14"></polyline>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                                Проверить цепь Tor
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Tor Telemetry Grid -->
+                    <div class="tor-metrics-grid">
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Статус подключения</div>
+                            <div class="tor-metric-value" id="torStatusBadge" style="color: var(--accent-green); display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="tor-dot active"></span>
+                                Подключено
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Выходной IP (Exit Node)</div>
+                            <div class="tor-metric-value" id="torExitIpValue" style="color: var(--accent-cyan);">
+                                23.128.248.171
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Подтверждение Tor Project</div>
+                            <div class="tor-metric-value" id="torIsTorValue" style="color: var(--accent-green);">
+                                Да (IsTor: true)
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Порт Tor SOCKS5</div>
+                            <div class="tor-metric-value" id="torActivePortValue">
+                                127.0.0.1:9150
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Задержка цепи</div>
+                            <div class="tor-metric-value" id="torLatencyValue" style="color: #cbd5e1;">
+                                ~1.6 с
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">DNS Защита (Kill Switch)</div>
+                            <div class="tor-metric-value" style="color: var(--accent-green);">
+                                Активна (socks5h)
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tor Config Form inside card -->
+                    <div style="margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1rem;">
+                        <div style="flex: 1; min-width: 200px;">
+                            <label class="form-label" style="margin-bottom: 0.4rem;">Порт Tor SOCKS5</label>
+                            <select class="form-select" id="torPortSelect">
+                                <option value="9150">9150 (Tor Browser на ПК — Рекомендуется)</option>
+                                <option value="9050">9050 (Tor Фоновая служба / Expert Bundle)</option>
+                                <option value="custom">Указать другой порт...</option>
+                            </select>
+                        </div>
+
+                        <div id="torCustomPortContainer" style="display: none; width: 140px;">
+                            <label class="form-label" style="margin-bottom: 0.4rem;">Номер порта</label>
+                            <input type="number" class="form-input" id="torCustomPortInput" value="9150" min="1024" max="65535">
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.6rem; padding-bottom: 0.4rem;">
+                            <input type="checkbox" id="torStrictSwitch" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-cyan);">
+                            <label for="torStrictSwitch" style="font-size: 0.85rem; color: #fff; cursor: pointer; user-select: none;">
+                                Kill Switch (блокировать трафик при недоступности Tor)
+                            </label>
+                        </div>
+
+                        <button class="btn btn-secondary btn-sm" id="btnSaveTorSettings" style="margin-bottom: 0.2rem;">
+                            Сохранить настройки Tor
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <!-- Tor Security Architecture Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                </svg>
+                                Принудительная изоляция через Tor
+                            </div>
+                        </div>
+
+                        <div style="font-size: 0.875rem; line-height: 1.7; color: var(--text-secondary);">
+                            <p style="margin-bottom: 0.8rem;">
+                                🔒 <strong>Сторонние прокси полностью отключены:</strong> Система настроена исключительно на работу через локальный узел Tor. Все сетевые сокеты и DNS-запросы направляются по протоколу <code>socks5h://127.0.0.1:9150</code>.
+                            </p>
+                            <p style="margin-bottom: 0.8rem;">
+                                ⚡ <strong>Защита Kill Switch:</strong> При случайном закрытии Tor Browser запросы не переключаются на прямое подключение вашего ПК, а немедленно блокируются, предотвращая утечку настоящего IP.
+                            </p>
+                            <div style="margin-top: 1rem; padding: 0.8rem; background: rgba(6, 182, 212, 0.08); border-radius: var(--radius-sm); border: 1px solid rgba(6, 182, 212, 0.2);">
+                                <span style="color: #fff; font-weight: 600;">Статус изоляции:</span>
+                                <span style="color: var(--accent-green); font-weight: 600;">АКТИВНА (100% трафика в Tor)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Security Spec Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                Спецификация защиты и анонимизации
+                            </div>
+                        </div>
+
+                        <div style="font-size: 0.875rem; line-height: 1.7; color: var(--text-secondary);">
+                            <p style="margin-bottom: 0.6rem;">
+                                🧅 <strong>Полная изоляция трафика через Tor:</strong> Весь трафик к wvids.com, серверам загрузки медиа oakroot.top и сопутствующим API принудительно направляется через Tor сеть.
+                            </p>
+                            <p style="margin-bottom: 0.6rem;">
+                                🔒 <strong>Zero DNS Leaks (<code style="color: var(--accent-cyan);">socks5h://</code>):</strong> Все доменные имена разрешаются исключительно на удаленном Tor Exit Node, исключая запросы через DNS вашего провайдера.
+                            </p>
+                            <p style="margin-bottom: 0.6rem;">
+                                ✔ <strong>JA3 / JA4 TLS Fingerprint Spoofing:</strong> Подмена нативных шифров (Cipher Suites), криптографических расширений (Extensions) и групп эллиптических кривых.
+                            </p>
+                            <p style="margin-bottom: 0.6rem;">
+                                ✔ <strong>HTTP/2 Frame Alignment:</strong> Полная идентичность структуры фреймов браузера (SETTINGS, WINDOW_UPDATE, порядок псевдо-заголовков :method, :authority, :scheme, :path).
+                            </p>
+                            <p>
+                                ✔ <strong>Поведенческий трекер actionfingerprint:</strong> Генерация зашифрованных координат курсора, дельт скролла и микро-таймингов для обхода анти-бот систем.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 6: LOGS -->
+            <section id="tab-logs" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="4 17 10 11 4 5"></polyline>
+                                <line x1="12" y1="19" x2="20" y2="19"></line>
+                            </svg>
+                            Системный журнал операций
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn btn-secondary btn-sm" id="btnRefreshLogs">Обновить</button>
+                            <button class="btn btn-danger btn-sm" id="btnClearLogs">Очистить</button>
+                        </div>
+                    </div>
+
+                    <div class="logs-console" id="logsConsole">
+                        <!-- Populated via JS -->
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

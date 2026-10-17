@@ -1,0 +1,293 @@
+import os
+import mimetypes
+import asyncio
+import re
+from pathlib import Path
+from typing import Dict, Any, Optional, Callable
+from curl_cffi.curl import CurlMime
+from bs4 import BeautifulSoup
+
+from .config import MAX_FILE_SIZE_BYTES, URL_SHARE, DEFAULT_HOST
+from .client import WvidsClient
+from .fingerprint import human_jitter
+from .storage import add_log, update_upload_record
+
+# Common media MIME types fallback
+MIME_MAP = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".m4v": "video/x-m4v",
+    ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif"
+}
+
+def detect_mime_type(file_path: str) -> str:
+    ext = Path(file_path).suffix.lower()
+    if ext in MIME_MAP:
+        return MIME_MAP[ext]
+    mime, _ = mimetypes.guess_type(file_path)
+    return mime or "application/octet-stream"
+
+class ContentUploader:
+    def __init__(self, client: WvidsClient):
+        self.client = client
+
+    async def upload(
+        self,
+        file_path: str,
+        title: str = "",
+        description: str = "",
+        record_id: Optional[int] = None,
+        progress_callback: Optional[Callable[[str, int], None]] = None
+    ) -> Dict[str, Any]:
+        """
+        Full automated pipeline for uploading video or photo to wvids.com:
+        1. Token & Config retrieval + suspension check
+        2. Binary upload via curl_cffi CurlMime (TLS/HTTP2 impersonated)
+        3. Custom Title & Description metadata attachment (both pre-share and post-share)
+        4. Publication (share: 1)
+        """
+        def report(msg: str, pct: int):
+            if progress_callback:
+                progress_callback(msg, pct)
+
+        file_p = Path(file_path)
+        if not file_p.exists():
+            err = f"Файл не найден на ПК: {file_path}"
+            add_log("ERROR", err)
+            if record_id: update_upload_record(record_id, "failed", error=err)
+            return {"success": False, "error": err}
+
+        file_size = file_p.stat().st_size
+        if file_size > MAX_FILE_SIZE_BYTES:
+            err = f"Размер файла превышает лимит 300 МБ: {file_size / (1024*1024):.1f} МБ"
+            add_log("ERROR", err)
+            if record_id: update_upload_record(record_id, "failed", error=err)
+            return {"success": False, "error": err}
+
+        mime_type = detect_mime_type(file_path)
+        filename = file_p.name
+
+        report("1/4: Получение конфигурации и проверка статуса аккаунта...", 15)
+        add_log("INFO", f"Начало выгрузки {filename} ({file_size / (1024*1024):.1f} MB, {mime_type})")
+
+        # 1. Fetch config and API Key
+        config = await self.client.get_upload_config()
+        api_key = config.get("apiKey")
+        upload_url = config.get("uploadUrl")
+        api_url = config.get("apiUrl")
+
+        if not api_key:
+            err = "Не удалось получить токен загрузки apiKey. Проверьте cookies аккаунта."
+            add_log("ERROR", err)
+            if record_id: update_upload_record(record_id, "failed", error=err)
+            return {"success": False, "error": err}
+
+        report("2/4: Передача файла через антидетект TLS/HTTP2...", 35)
+        await human_jitter(0.3, 0.7)
+
+        # 2. Upload file binary via CurlMime
+        session = self.client.get_session()
+        headers = {
+            "Origin": "https://wvids.com",
+            "Referer": URL_SHARE,
+            "X-Requested-With": "XMLHttpRequest"
+        }
+
+        try:
+            mime = CurlMime()
+            mime.addpart(
+                name="file",
+                filename=filename,
+                local_path=str(file_p.resolve()),
+                content_type=mime_type
+            )
+            mime.addpart(name="key", data=api_key.encode("utf-8"))
+
+            upload_res = session.post(
+                upload_url,
+                multipart=mime,
+                headers=headers,
+                timeout=300
+            )
+
+            if upload_res.status_code != 200:
+                err = f"Сервер загрузки вернул HTTP {upload_res.status_code}"
+                add_log("ERROR", err, upload_res.text[:500])
+                if record_id: update_upload_record(record_id, "failed", error=err)
+                return {"success": False, "error": err}
+
+            try:
+                res_json = upload_res.json()
+            except Exception:
+                res_json = {}
+
+            if not res_json.get("success", False) and not res_json.get("id"):
+                raw_err = res_json.get("error", "")
+                full_text = upload_res.text.lower()
+                is_duplicate = "already exist" in raw_err.lower() or "already exist" in full_text
+                if is_duplicate:
+                    err = "This file already exists"
+                    add_log("WARNING", f"Файл {filename} уже есть на сервере (This file already exists).")
+                    if record_id: update_upload_record(record_id, "duplicate", error=err)
+                    return {"success": False, "is_duplicate": True, "error": err, "filename": filename}
+
+                if "suspended" in raw_err.lower():
+                    err = "Аккаунт заблокирован/приостановлен на wvids.com (Account suspended). Зайдите на сайт и проверьте статус или подтвердите email."
+                else:
+                    err = raw_err or "Сервер отклонил файл загрузки"
+                add_log("ERROR", f"Сбой загрузки: {err}")
+                if record_id: update_upload_record(record_id, "failed", error=err)
+                return {"success": False, "is_duplicate": False, "error": err}
+
+            file_id = res_json.get("id")
+            if not file_id:
+                err = "Сервер не вернул fileId после загрузки"
+                add_log("ERROR", err)
+                if record_id: update_upload_record(record_id, "failed", error=err)
+                return {"success": False, "error": err}
+
+            add_log("SUCCESS", f"Файл выгружен на сервер, получен ID: {file_id}")
+            report(f"3/4: Сохранение метаданных (название: '{title}', описание)...", 65)
+            await human_jitter(0.3, 0.6)
+
+            # 3. Set custom title and description via staging edit form
+            # Call edit: "1", fid: file_id to retrieve server form structure
+            form_fields: Dict[str, str] = {}
+            try:
+                edit_res = session.post(
+                    api_url,
+                    data={"edit": "1", "fid": str(file_id), "key": api_key},
+                    headers=headers,
+                    timeout=15
+                )
+                if edit_res.status_code == 200:
+                    try:
+                        e_json = edit_res.json()
+                        html_data = e_json.get("data", "")
+                        if html_data:
+                            soup = BeautifulSoup(html_data, "html.parser")
+                            for inp in soup.find_all(["input", "textarea"]):
+                                name_attr = inp.get("name")
+                                val_attr = inp.get("value", "")
+                                if name_attr:
+                                    form_fields[name_attr] = val_attr
+                    except Exception:
+                        pass
+            except Exception as e:
+                add_log("WARNING", f"Ошибка получения формы редактирования: {e}")
+
+            # Populate metadata payload with exact form values
+            meta_payload = dict(form_fields)
+            meta_payload["fileId"] = str(file_id)
+            meta_payload["key"] = api_key
+            # Title fields
+            target_title = title if title else filename
+            meta_payload["name"] = target_title
+            meta_payload["title"] = target_title
+            # Description fields
+            if description:
+                meta_payload["description"] = description
+                meta_payload["desc"] = description
+                meta_payload["text"] = description
+
+            meta_res = session.post(
+                api_url,
+                data=meta_payload,
+                headers={
+                    **headers,
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                timeout=15
+            )
+
+            add_log("INFO", f"Ответ сохранения метаданных (share.php): {meta_res.status_code} {meta_res.text[:150]}")
+            report("4/4: Финализация и публикация на канале...", 85)
+            await human_jitter(0.4, 0.8)
+
+            # 4. Finalize and Share
+            share_payload = {
+                "share": "1",
+                "key": api_key
+            }
+
+            share_res = session.post(
+                api_url,
+                data=share_payload,
+                headers={
+                    **headers,
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                timeout=15
+            )
+
+            share_json = {}
+            try:
+                share_json = share_res.json()
+            except Exception:
+                pass
+
+            # 5. Dual update: also update title and description on live post via redact_content.php
+            await human_jitter(0.5, 1.0)
+            try:
+                redact_headers = {
+                    "Origin": "https://wvids.com",
+                    "Referer": "https://wvids.com/",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+                if title:
+                    r_title = session.post(
+                        f"{DEFAULT_HOST}/api/redact_content.php",
+                        data={"text": title, "type": "title", "fileid": str(file_id)},
+                        headers=redact_headers,
+                        timeout=10
+                    )
+                    add_log("INFO", f"redact_content (title) ответ: {r_title.text[:100]}")
+                if description:
+                    r_desc = session.post(
+                        f"{DEFAULT_HOST}/api/redact_content.php",
+                        data={"text": description, "type": "description", "fileid": str(file_id)},
+                        headers=redact_headers,
+                        timeout=10
+                    )
+                    add_log("INFO", f"redact_content (description) ответ: {r_desc.text[:100]}")
+            except Exception as e:
+                add_log("WARNING", f"redact_content post-publish error: {e}")
+
+            if share_res.status_code == 200 and (share_json.get("success") is True or "success" in share_res.text):
+                success_msg = f"Контент '{target_title}' успешно выложен на wvids.com!"
+                report(success_msg, 100)
+                add_log("SUCCESS", success_msg, f"fid={file_id}")
+                if record_id:
+                    update_upload_record(record_id, "success", remote_fid=str(file_id))
+                return {
+                    "success": True,
+                    "file_id": file_id,
+                    "title": target_title,
+                    "description": description,
+                    "filename": filename,
+                    "message": success_msg
+                }
+            else:
+                err = share_json.get("error") or "Не удалось завершить публикацию (share)"
+                add_log("WARNING", f"Предупреждение публикации: {err}")
+                if record_id: update_upload_record(record_id, "published_with_warning", remote_fid=str(file_id))
+                return {
+                    "success": True,
+                    "file_id": file_id,
+                    "title": target_title,
+                    "message": "Файл выгружен и метаданные сохранены"
+                }
+
+        except Exception as e:
+            err = f"Ошибка конвейера загрузки: {str(e)}"
+            add_log("ERROR", err)
+            if record_id: update_upload_record(record_id, "error", error=err)
+            return {"success": False, "error": err}
