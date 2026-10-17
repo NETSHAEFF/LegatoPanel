@@ -233,43 +233,77 @@ class ContentUploader:
             except Exception:
                 pass
 
-            # 5. Dual update: also update title and description on live post via redact_content.php
-            await human_jitter(0.5, 1.0)
-            try:
-                redact_headers = {
-                    "Origin": "https://wvids.com",
-                    "Referer": "https://wvids.com/",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Content-Type": "application/x-www-form-urlencoded"
-                }
-                if title:
-                    r_title = session.post(
-                        f"{DEFAULT_HOST}/api/redact_content.php",
-                        data={"text": title, "type": "title", "fileid": str(file_id)},
-                        headers=redact_headers,
-                        timeout=10
+            # 5. Dual update: attach Description & Title on the live post on wvids.com
+            # Note: file_id is a staging ID from upload.php (e.g. 8563194).
+            # When published via share.php, wvids creates a live post with a new post ID (e.g. 9489861).
+            # We locate the newly published post on the user channel to attach description & title.
+            real_fid = None
+            username = config.get("username")
+            if not username:
+                try:
+                    from .storage import get_active_account
+                    acc = get_active_account()
+                    if acc and acc.get("username"):
+                        username = acc.get("username")
+                except Exception:
+                    pass
+
+            if not username:
+                try:
+                    v = await self.client.verify_session()
+                    username = v.get("username")
+                except Exception:
+                    pass
+
+            report("4/4: Применение описания к опубликованному посту...", 92)
+            await human_jitter(0.8, 1.4)
+
+            if username:
+                for attempt in range(4):
+                    try:
+                        latest_posts = await self.client.get_all_user_posts(username=username, max_pages=1)
+                        if latest_posts:
+                            # 1. Match by title first
+                            for p in latest_posts[:5]:
+                                if p.get("title") and (p.get("title").strip() == target_title.strip() or target_title.strip() in p.get("title")):
+                                    real_fid = str(p.get("file_id"))
+                                    break
+                            # 2. Fallback to topmost (most recent) post
+                            if not real_fid and latest_posts[0].get("file_id"):
+                                real_fid = str(latest_posts[0].get("file_id"))
+                            if real_fid:
+                                break
+                    except Exception as e:
+                        add_log("WARNING", f"Попытка {attempt + 1}: ожидание появления публикации на канале: {e}")
+                    await asyncio.sleep(1.2)
+
+            target_post_fid = real_fid or str(file_id)
+
+            if description or target_title:
+                try:
+                    redact_res = await self.client.redact_post(
+                        file_id=target_post_fid,
+                        title=target_title if title else None,
+                        description=description if description else None
                     )
-                    add_log("INFO", f"redact_content (title) ответ: {r_title.text[:100]}")
-                if description:
-                    r_desc = session.post(
-                        f"{DEFAULT_HOST}/api/redact_content.php",
-                        data={"text": description, "type": "description", "fileid": str(file_id)},
-                        headers=redact_headers,
-                        timeout=10
-                    )
-                    add_log("INFO", f"redact_content (description) ответ: {r_desc.text[:100]}")
-            except Exception as e:
-                add_log("WARNING", f"redact_content post-publish error: {e}")
+                    if redact_res.get("success"):
+                        add_log("SUCCESS", f"✅ Описание успешно установлено для публикации #{target_post_fid}")
+                    else:
+                        err_msg = "; ".join(redact_res.get("errors", ["Неизвестная ошибка"]))
+                        add_log("WARNING", f"⚠️ Предупреждение установки описания для #{target_post_fid}: {err_msg}")
+                except Exception as e:
+                    add_log("WARNING", f"Исключение при установке описания: {e}")
 
             if share_res.status_code == 200 and (share_json.get("success") is True or "success" in share_res.text):
                 success_msg = f"Контент '{target_title}' успешно выложен на wvids.com!"
                 report(success_msg, 100)
-                add_log("SUCCESS", success_msg, f"fid={file_id}")
+                add_log("SUCCESS", success_msg, f"fid={target_post_fid}")
                 if record_id:
-                    update_upload_record(record_id, "success", remote_fid=str(file_id))
+                    update_upload_record(record_id, "success", remote_fid=str(target_post_fid))
                 return {
                     "success": True,
-                    "file_id": file_id,
+                    "file_id": target_post_fid,
+                    "staging_id": file_id,
                     "title": target_title,
                     "description": description,
                     "filename": filename,
@@ -278,11 +312,13 @@ class ContentUploader:
             else:
                 err = share_json.get("error") or "Не удалось завершить публикацию (share)"
                 add_log("WARNING", f"Предупреждение публикации: {err}")
-                if record_id: update_upload_record(record_id, "published_with_warning", remote_fid=str(file_id))
+                if record_id: update_upload_record(record_id, "published_with_warning", remote_fid=str(target_post_fid))
                 return {
                     "success": True,
-                    "file_id": file_id,
+                    "file_id": target_post_fid,
+                    "staging_id": file_id,
                     "title": target_title,
+                    "description": description,
                     "message": "Файл выгружен и метаданные сохранены"
                 }
 

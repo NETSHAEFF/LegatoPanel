@@ -14,7 +14,7 @@ if sys.platform == "win32":
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from backend.storage import get_active_account, save_account, update_account_stats, get_tor_config
+from backend.storage import get_active_account, save_account, update_account_stats, get_tor_config, get_setting
 from backend.client import WvidsClient
 from backend.uploader import ContentUploader
 from backend.fingerprint import parse_cookies_input
@@ -39,8 +39,12 @@ async def cmd_batch(args):
         return
     folder = args.folder or "videos"
     delay_min = args.interval or 5.0
+    desc = args.desc or get_setting("batch_desc", "")
     print(f"[*] Запуск пакетной публикации из папки '{folder}'...")
     print(f"[*] Интервал после успешной выгрузки: {delay_min} мин.")
+    if desc:
+        desc_preview = (desc[:45] + "...") if len(desc) > 45 else desc
+        print(f"[*] Описание: '{desc_preview}'")
     print(f"[*] При обнаружении дубликата ('This file already exists') пропуск БЕЗ ПАУЗЫ.")
     print(f"[*] Маршрут: 🧅 Tor SOCKS5 (защита от утечек)")
 
@@ -48,7 +52,7 @@ async def cmd_batch(args):
         folder_path=folder,
         delay_minutes=delay_min,
         title_template=args.title or "",
-        desc_template=args.desc or "",
+        desc_template=desc,
         account_id=active["id"]
     )
     if not res.get("success"):

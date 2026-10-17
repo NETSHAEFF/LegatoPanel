@@ -108,7 +108,7 @@ class BatchUploadWorker:
         self.folder_path = folder_path.strip() if folder_path and folder_path.strip() else str(VIDEOS_DIR)
         self.delay_seconds = max(5, int(delay_minutes * 60))
         self.title_template = title_template.strip()
-        self.desc_template = desc_template.strip()
+        self.desc_template = desc_template.strip() if (desc_template and desc_template.strip()) else get_setting("batch_desc", "")
         self.account_id = account_id
 
         self.success_count = 0
@@ -124,7 +124,8 @@ class BatchUploadWorker:
         set_setting("batch_folder", self.folder_path)
         set_setting("batch_interval_min", str(delay_minutes))
         set_setting("batch_title", self.title_template)
-        set_setting("batch_desc", self.desc_template)
+        if self.desc_template:
+            set_setting("batch_desc", self.desc_template)
 
         self.task = asyncio.create_task(self._run_loop())
         add_log("INFO", f"▶️ Запущена пакетная публикация из '{self.folder_path}' (интервал: {delay_minutes} мин.)")
@@ -195,19 +196,36 @@ class BatchUploadWorker:
 
                 # Construct Title: template support
                 if self.title_template:
-                    title = self.title_template.replace("{filename}", stem).replace("{name}", stem).replace("{index}", str(idx))
+                    title = (
+                        self.title_template
+                        .replace("{filename}", stem)
+                        .replace("{name}", stem)
+                        .replace("{stem}", stem)
+                        .replace("{index}", str(idx))
+                        .replace("{i}", str(idx))
+                    )
                 else:
                     title = stem
 
                 # Construct Description: template support
-                if self.desc_template:
-                    description = self.desc_template.replace("{filename}", stem).replace("{name}", stem).replace("{index}", str(idx))
+                desc_tpl = self.desc_template if self.desc_template else get_setting("batch_desc", "")
+                if desc_tpl:
+                    description = (
+                        desc_tpl
+                        .replace("{title}", title)
+                        .replace("{filename}", stem)
+                        .replace("{name}", stem)
+                        .replace("{stem}", stem)
+                        .replace("{index}", str(idx))
+                        .replace("{i}", str(idx))
+                    )
                 else:
                     description = ""
 
                 self.state = "running"
                 self.last_message = f"[{idx}/{self.total_files}] Публикация: '{filename}'..."
-                add_log("INFO", f"Выгрузка файла очереди: {filename} (Название: '{title}')")
+                desc_preview = (description[:35] + "...") if len(description) > 35 else description
+                add_log("INFO", f"Выгрузка файла очереди: {filename} (Название: '{title}', Описание: '{desc_preview}')")
 
                 # Add upload record to DB
                 record_id = add_upload_record(

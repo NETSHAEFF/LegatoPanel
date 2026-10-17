@@ -356,11 +356,12 @@ async def start_batch_endpoint(req: StartBatchRequest):
     target = req.folder_path or "videos"
     p = VIDEOS_DIR if target.strip() in ["videos", "/videos", "\\videos", ""] else Path(target.strip())
     
+    desc = req.desc_template.strip() if (req.desc_template and req.desc_template.strip()) else get_setting("batch_desc", "")
     res = await batch_worker.start(
         folder_path=str(p),
         delay_minutes=req.delay_minutes or 5.0,
         title_template=req.title_template or "",
-        desc_template=req.desc_template or "",
+        desc_template=desc,
         account_id=active["id"]
     )
     if not res.get("success"):
