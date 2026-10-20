@@ -6,11 +6,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 UPLOADS_DIR = BASE_DIR / "uploads"
 VIDEOS_DIR = BASE_DIR / "videos"
+WATERMARKS_DIR = DATA_DIR / "watermarks"
 DB_PATH = DATA_DIR / "wvids_panel.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+WATERMARKS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default Host & Endpoints
 DEFAULT_HOST = "https://wvids.com"

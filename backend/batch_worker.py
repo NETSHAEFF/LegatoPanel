@@ -278,8 +278,11 @@ class BatchUploadWorker:
                     add_log("ERROR", f"❌ Сбой публикации {filename}: {err_txt}")
 
                     # If account suspended, halt immediately
-                    if "suspended" in err_txt.lower():
-                        self.last_message = f"Аккаунт заблокирован на wvids.com: {err_txt}"
+                    if result.get("is_suspended") or "suspended" in err_txt.lower():
+                        from .storage import mark_account_suspended
+                        mark_account_suspended(account["id"], "Account suspended")
+                        self.last_message = f"🚨 Аккаунт @{account.get('username')} заблокирован (Account suspended)!"
+                        add_log("ERROR", f"🚨 [ОСТАНОВКА ОЧЕРЕДИ] {self.last_message}")
                         self.state = "idle"
                         break
 

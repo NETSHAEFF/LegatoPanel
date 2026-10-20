@@ -11,6 +11,7 @@ from .config import MAX_FILE_SIZE_BYTES, URL_SHARE, DEFAULT_HOST
 from .client import WvidsClient
 from .fingerprint import human_jitter
 from .storage import add_log, update_upload_record
+from .video_processor import process_video_if_enabled
 
 # Common media MIME types fallback
 MIME_MAP = {
@@ -64,6 +65,15 @@ class ContentUploader:
             if record_id: update_upload_record(record_id, "failed", error=err)
             return {"success": False, "error": err}
 
+        if account_id:
+            from .storage import get_account_by_id
+            acc = get_account_by_id(account_id)
+            if acc and acc.get("is_suspended"):
+                err = f"Выгрузка отменена: Аккаунт @{acc.get('username')} заблокирован (Account suspended)"
+                add_log("ERROR", f"🚨 {err}")
+                if record_id: update_upload_record(record_id, "failed", error=err)
+                return {"success": False, "is_suspended": True, "error": err}
+
         file_size = file_p.stat().st_size
         if file_size > MAX_FILE_SIZE_BYTES:
             err = f"Размер файла превышает лимит 300 МБ: {file_size / (1024*1024):.1f} МБ"
@@ -73,12 +83,22 @@ class ContentUploader:
 
         mime_type = detect_mime_type(file_path)
         filename = file_p.name
+        original_stem = file_p.stem
 
         report("1/4: Получение конфигурации и проверка статуса аккаунта...", 15)
         add_log("INFO", f"Начало выгрузки {filename} ({file_size / (1024*1024):.1f} MB, {mime_type})")
 
         # 1. Fetch config and API Key
         config = await self.client.get_upload_config()
+        if config.get("is_suspended"):
+            err = "Аккаунт заблокирован на wvids.com: Account suspended"
+            if account_id:
+                from .storage import mark_account_suspended
+                mark_account_suspended(account_id, "Account suspended")
+            add_log("ERROR", f"🚨 [БЛОКИРОВКА АККАУНТА] {err}")
+            if record_id: update_upload_record(record_id, "failed", error=err)
+            return {"success": False, "is_suspended": True, "error": err}
+
         api_key = config.get("apiKey")
         upload_url = config.get("uploadUrl")
         api_url = config.get("apiUrl")
@@ -88,6 +108,44 @@ class ContentUploader:
             add_log("ERROR", err)
             if record_id: update_upload_record(record_id, "failed", error=err)
             return {"success": False, "error": err}
+
+        # Pre-processing: Apply Watermark & Uniqueization if enabled
+        processed_file_path = None
+        effective_file_p = file_p
+        effective_filename = filename
+        effective_mime_type = mime_type
+
+        is_video = mime_type.startswith("video/") or file_p.suffix.lower() in [
+            ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"
+        ]
+
+        if is_video:
+            username = ""
+            try:
+                from .storage import get_active_account
+                acc = get_active_account()
+                if acc:
+                    username = acc.get("username", "")
+            except Exception:
+                pass
+
+            report("Обработка: наложение водяного знака и уникализация...", 25)
+            try:
+                proc_res = await process_video_if_enabled(
+                    input_file=str(file_p),
+                    title=title or original_stem,
+                    username=username,
+                    progress_callback=lambda msg, pct: report(msg, pct)
+                )
+                if proc_res.get("processed"):
+                    processed_file_path = proc_res.get("output_path")
+                    effective_file_p = Path(processed_file_path)
+                    effective_filename = effective_file_p.name
+                    effective_mime_type = detect_mime_type(str(effective_file_p))
+                    file_size = effective_file_p.stat().st_size
+                    add_log("SUCCESS", f"Видео {filename} уникализировано: {proc_res.get('details')}")
+            except Exception as pe:
+                add_log("WARNING", f"Не удалось выполнить уникализацию {filename}: {pe}. Загружаем исходный файл.")
 
         report("2/4: Передача файла через антидетект TLS/HTTP2...", 35)
         await human_jitter(0.3, 0.7)
@@ -104,9 +162,9 @@ class ContentUploader:
             mime = CurlMime()
             mime.addpart(
                 name="file",
-                filename=filename,
-                local_path=str(file_p.resolve()),
-                content_type=mime_type
+                filename=effective_filename,
+                local_path=str(effective_file_p.resolve()),
+                content_type=effective_mime_type
             )
             mime.addpart(name="key", data=api_key.encode("utf-8"))
 
@@ -138,8 +196,15 @@ class ContentUploader:
                     if record_id: update_upload_record(record_id, "duplicate", error=err)
                     return {"success": False, "is_duplicate": True, "error": err, "filename": filename}
 
-                if "suspended" in raw_err.lower():
-                    err = "Аккаунт заблокирован/приостановлен на wvids.com (Account suspended). Зайдите на сайт и проверьте статус или подтвердите email."
+                is_suspended = "suspended" in raw_err.lower() or "suspended" in full_text
+                if is_suspended:
+                    err = "Аккаунт заблокирован на wvids.com: Account suspended"
+                    if account_id:
+                        from .storage import mark_account_suspended
+                        mark_account_suspended(account_id, "Account suspended")
+                    add_log("ERROR", f"🚨 [БЛОКИРОВКА АККАУНТА] Выгрузка отклонена: {err}")
+                    if record_id: update_upload_record(record_id, "failed", error=err)
+                    return {"success": False, "is_suspended": True, "is_duplicate": False, "error": err}
                 else:
                     err = raw_err or "Сервер отклонил файл загрузки"
                 add_log("ERROR", f"Сбой загрузки: {err}")
@@ -188,7 +253,7 @@ class ContentUploader:
             meta_payload["fileId"] = str(file_id)
             meta_payload["key"] = api_key
             # Title fields
-            target_title = title if title else filename
+            target_title = title if title else original_stem
             meta_payload["name"] = target_title
             meta_payload["title"] = target_title
             # Description fields
@@ -327,3 +392,9 @@ class ContentUploader:
             add_log("ERROR", err)
             if record_id: update_upload_record(record_id, "error", error=err)
             return {"success": False, "error": err}
+        finally:
+            if processed_file_path and Path(processed_file_path).exists() and str(processed_file_path) != str(file_path):
+                try:
+                    os.remove(processed_file_path)
+                except Exception:
+                    pass

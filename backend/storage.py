@@ -67,6 +67,16 @@ def init_db():
     )
     """)
 
+    # Check and migrate accounts table columns for suspension support
+    cursor.execute("PRAGMA table_info(accounts)")
+    account_cols = [col[1] for col in cursor.fetchall()]
+    if "is_suspended" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN is_suspended INTEGER DEFAULT 0")
+    if "suspension_reason" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN suspension_reason TEXT DEFAULT ''")
+    if "suspended_at" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN suspended_at INTEGER DEFAULT 0")
+
     # Seed default Tor settings (enabled by default)
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tor_enabled', '1')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tor_port', '9150')")
@@ -103,18 +113,23 @@ def clear_logs():
     conn.close()
 
 # Accounts Management
+def format_account_row(r) -> Dict[str, Any]:
+    if not r:
+        return {}
+    d = dict(r)
+    d["cookies"] = json.loads(d["cookies_json"]) if d.get("cookies_json") else {}
+    d["is_suspended"] = bool(d.get("is_suspended", 0))
+    d["suspension_reason"] = d.get("suspension_reason") or ""
+    d["suspended_at"] = d.get("suspended_at") or 0
+    return d
+
 def get_all_accounts() -> List[Dict[str, Any]]:
     conn = get_connection()
     c = conn.cursor()
     c.execute("SELECT * FROM accounts ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["cookies"] = json.loads(d["cookies_json"]) if d["cookies_json"] else {}
-        result.append(d)
-    return result
+    return [format_account_row(r) for r in rows]
 
 def get_account_by_id(account_id: int) -> Optional[Dict[str, Any]]:
     conn = get_connection()
@@ -124,9 +139,7 @@ def get_account_by_id(account_id: int) -> Optional[Dict[str, Any]]:
     conn.close()
     if not row:
         return None
-    d = dict(row)
-    d["cookies"] = json.loads(d["cookies_json"]) if d["cookies_json"] else {}
-    return d
+    return format_account_row(row)
 
 def get_active_account() -> Optional[Dict[str, Any]]:
     conn = get_connection()
@@ -139,9 +152,30 @@ def get_active_account() -> Optional[Dict[str, Any]]:
     conn.close()
     if not row:
         return None
-    d = dict(row)
-    d["cookies"] = json.loads(d["cookies_json"]) if d["cookies_json"] else {}
-    return d
+    return format_account_row(row)
+
+def mark_account_suspended(account_id: int, reason: str = "Account suspended"):
+    conn = get_connection()
+    c = conn.cursor()
+    now = int(time.time())
+    c.execute(
+        "UPDATE accounts SET is_suspended = 1, suspension_reason = ?, suspended_at = ? WHERE id = ?",
+        (reason, now, account_id)
+    )
+    conn.commit()
+    conn.close()
+    add_log("ERROR", f"🚨 [ВНИМАНИЕ] Аккаунт #{account_id} заблокирован на wvids.com: {reason}")
+
+def mark_account_active(account_id: int):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE accounts SET is_suspended = 0, suspension_reason = '', suspended_at = 0 WHERE id = ?",
+        (account_id,)
+    )
+    conn.commit()
+    conn.close()
+    add_log("INFO", f"✅ Аккаунт #{account_id} проверен: Активен (блокировка отсутствует)")
 
 def set_active_account(account_id: int):
     conn = get_connection()
@@ -329,6 +363,69 @@ def save_tor_config(enabled: bool, port: int, strict: bool = True, host: str = "
     set_setting("tor_port", str(port))
     set_setting("tor_host", host)
     set_setting("tor_strict", "1" if strict else "0")
+
+DEFAULT_PROCESSING_SETTINGS: Dict[str, Any] = {
+    # Watermark General Mode
+    "watermark_enabled": True,
+    "watermark_mode": "text",              # "both", "text", "media", "none"
+
+    # Text Watermark Settings
+    "watermark_text": "@wvids",
+    "watermark_font": "arial.ttf",
+    "watermark_size": 36,
+    "watermark_color": "#ffffff",
+    "watermark_opacity": 0.9,
+    "watermark_position": "bottom_right",  # bottom_right, bottom_left, top_right, top_left, center, bottom_center, top_center
+    "watermark_margin_x": 30,
+    "watermark_margin_y": 30,
+    "watermark_box_enabled": True,
+    "watermark_box_color": "#000000",
+    "watermark_box_opacity": 0.55,
+    "watermark_box_border": 10,
+    "watermark_start_time": 0.0,           # seconds after start (0 = сразу)
+    "watermark_duration": 0.0,             # seconds duration (0 = до конца)
+
+    # Media Watermark Settings (Photo or Video via Drag & Drop)
+    "watermark_media_path": "",            # absolute path to uploaded image/video
+    "watermark_media_name": "",            # original filename
+    "watermark_media_type": "image",       # "image" or "video"
+    "watermark_media_scale": 18,           # % of video width (10-50%)
+    "watermark_media_opacity": 0.85,       # 0.1 to 1.0
+    "watermark_media_position": "top_right", # bottom_right, bottom_left, top_right, top_left, center...
+    "watermark_media_margin_x": 30,
+    "watermark_media_margin_y": 30,
+    "watermark_media_start_time": 2.0,     # e.g. appears 2 seconds after video starts
+    "watermark_media_duration": 0.0,       # 0 = till end of video
+
+    # Uniqueizer Settings
+    "unique_enabled": True,
+    "unique_metadata": True,
+    "unique_device_profile": "random",   # random, iphone15, s24, pixel8, sony_a7
+    "unique_duration_mode": "random",    # random, add, trim, speed, none
+    "unique_duration_delta": 1.0,        # seconds to add or trim
+    "unique_visual_hash": True,          # micro-zoom, rotation, vignette, gamma
+    "unique_noise": True,                # dynamic sensor noise
+    "unique_audio_hash": True,           # pitch shift, eq, echo
+    "unique_preset": "fast",             # ultrafast, superfast, fast, medium
+    "unique_crf": 20                     # 18-24
+}
+
+def get_processing_settings() -> Dict[str, Any]:
+    raw = get_setting("video_processing_settings", "")
+    cfg = dict(DEFAULT_PROCESSING_SETTINGS)
+    if raw:
+        try:
+            stored = json.loads(raw)
+            cfg.update(stored)
+        except Exception:
+            pass
+    return cfg
+
+def save_processing_settings(new_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    curr = get_processing_settings()
+    curr.update(new_cfg)
+    set_setting("video_processing_settings", json.dumps(curr, ensure_ascii=False))
+    return curr
 
 # Initialize tables
 init_db()

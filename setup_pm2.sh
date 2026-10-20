@@ -34,7 +34,7 @@ fi
 echo -e "\n${GREEN}[1/6] Проверка и установка системных зависимостей (Python3, Tor, curl)...${NC}"
 if [ -n "$SUDO" ] || [ "$EUID" -eq 0 ]; then
     $SUDO apt-get update -y
-    $SUDO apt-get install -y python3 python3-pip python3-venv tor curl
+    $SUDO apt-get install -y python3 python3-pip python3-venv tor curl ffmpeg fonts-dejavu-core
 else
     if ! command -v python3 >/dev/null 2>&1; then
         echo -e "${RED}[ERROR] Python3 не установлен! Установите python3.${NC}"

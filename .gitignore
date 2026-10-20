@@ -22,6 +22,10 @@ uploads/*
 videos/*
 !videos/.gitkeep
 
+# Executables & Binaries
+*.exe
+ffmpeg.exe
+
 # Logs & temp files
 *.log
 *.tmp

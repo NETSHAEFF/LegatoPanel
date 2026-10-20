@@ -1,10 +1,12 @@
 import os
 import shutil
 import asyncio
+import time
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -13,6 +15,7 @@ from .config import (
     BASE_DIR,
     UPLOADS_DIR,
     VIDEOS_DIR,
+    WATERMARKS_DIR,
     DEFAULT_FINGERPRINT,
     SUPPORTED_FINGERPRINTS
 )
@@ -36,6 +39,8 @@ from .storage import (
     save_account,
     update_account_stats,
     update_account_username,
+    mark_account_suspended,
+    mark_account_active,
     delete_account,
     add_upload_record,
     get_recent_uploads,
@@ -45,7 +50,14 @@ from .storage import (
     get_tor_config,
     save_tor_config,
     get_setting,
-    set_setting
+    set_setting,
+    get_processing_settings,
+    save_processing_settings
+)
+from .video_processor import (
+    POPULAR_FONTS,
+    DEVICE_PROFILES,
+    run_test_processing
 )
 
 app = FastAPI(title="Wvids Manager Panel", version="1.0.0")
@@ -164,6 +176,63 @@ async def remove_account(account_id: int):
     add_log("INFO", f"Удален аккаунт ID {account_id}")
     return {"success": True, "message": "Аккаунт удален"}
 
+@app.post("/api/accounts/{account_id}/check-status")
+async def check_account_status_endpoint(account_id: int):
+    acc = get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Аккаунт не найден")
+
+    client = get_client_for_account(acc)
+    st = await client.check_account_status(acc.get("username"))
+
+    if st.get("status") == "suspended":
+        mark_account_suspended(account_id, st.get("reason", "Account suspended"))
+        return {
+            "success": True,
+            "status": "suspended",
+            "is_suspended": True,
+            "reason": st.get("reason", "Account suspended"),
+            "message": f"🚨 Аккаунт @{acc.get('username')} заблокирован на wvids.com: Account suspended"
+        }
+    elif st.get("status") == "active":
+        mark_account_active(account_id)
+        return {
+            "success": True,
+            "status": "active",
+            "is_suspended": False,
+            "message": f"✅ Аккаунт @{acc.get('username')} активен и функционирует штатно"
+        }
+    else:
+        return {
+            "success": False,
+            "status": st.get("status", "unknown"),
+            "is_suspended": False,
+            "error": st.get("error") or st.get("reason") or "Сессия не авторизована"
+        }
+
+class SimulateSuspensionRequest(BaseModel):
+    simulate: bool
+
+@app.post("/api/accounts/{account_id}/simulate-suspension")
+async def simulate_suspension_endpoint(account_id: int, req: SimulateSuspensionRequest):
+    acc = get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Аккаунт не найден")
+
+    if req.simulate:
+        mark_account_suspended(account_id, "Account suspended (Тест симуляции)")
+        msg = f"🚨 Включена симуляция блокировки для @{acc.get('username')}: Account suspended"
+    else:
+        mark_account_active(account_id)
+        msg = f"✅ Симуляция блокировки снята для @{acc.get('username')}"
+
+    return {
+        "success": True,
+        "is_suspended": req.simulate,
+        "message": msg,
+        "account": get_account_by_id(account_id)
+    }
+
 # Statistics
 @app.get("/api/statistics")
 async def get_active_statistics():
@@ -176,6 +245,10 @@ async def get_active_statistics():
 
     client = get_client_for_account(active)
     stats = await client.get_statistics(active["uid"], active["username"])
+
+    if stats.get("is_suspended"):
+        mark_account_suspended(active["id"], stats.get("error", "Account suspended"))
+        active = get_active_account()
 
     if stats.get("success"):
         update_account_stats(
@@ -193,7 +266,10 @@ async def get_active_statistics():
             "username": active["username"],
             "uid": active["uid"],
             "proxy": active["proxy"],
-            "fingerprint": active["fingerprint"]
+            "fingerprint": active["fingerprint"],
+            "is_suspended": active.get("is_suspended", False),
+            "suspension_reason": active.get("suspension_reason", ""),
+            "suspended_at": active.get("suspended_at", 0)
         },
         "stats": stats
     }
@@ -235,6 +311,11 @@ async def upload_file_form(
     active = get_active_account()
     if not active:
         raise HTTPException(status_code=400, detail="Сначала добавьте и активируйте аккаунт")
+    if active.get("is_suspended"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Выгрузка невозможна: Аккаунт @{active.get('username')} заблокирован (Account suspended). Смените аккаунт."
+        )
 
     # Save incoming file to local uploads directory
     temp_path = UPLOADS_DIR / file.filename
@@ -281,6 +362,11 @@ async def upload_local_path(req: LocalPathUploadRequest):
     active = get_active_account()
     if not active:
         raise HTTPException(status_code=400, detail="Сначала добавьте и активируйте аккаунт")
+    if active.get("is_suspended"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Выгрузка невозможна: Аккаунт @{active.get('username')} заблокирован (Account suspended). Смените аккаунт."
+        )
 
     p = Path(req.file_path.strip().strip('"').strip("'"))
     if not p.exists() or not p.is_file():
@@ -353,6 +439,11 @@ async def start_batch_endpoint(req: StartBatchRequest):
     active = get_active_account()
     if not active:
         raise HTTPException(status_code=400, detail="Сначала добавьте и активируйте аккаунт для выгрузки")
+    if active.get("is_suspended"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Пакетная публикация невозможна: Аккаунт @{active.get('username')} заблокирован (Account suspended)."
+        )
     
     target = req.folder_path or "videos"
     p = VIDEOS_DIR if target.strip() in ["videos", "/videos", "\\videos", ""] else Path(target.strip())
@@ -603,3 +694,140 @@ async def list_logs():
 async def clear_logs_endpoint():
     clear_logs()
     return {"success": True, "message": "Журнал очищен"}
+
+# Video Processing (Watermark & Uniqueizer)
+class ProcessorSettingsRequest(BaseModel):
+    settings: Dict[str, Any]
+
+class ProcessorTestRequest(BaseModel):
+    video_path: Optional[str] = None
+
+@app.get("/api/processor/settings")
+async def get_processor_settings_endpoint():
+    return {
+        "success": True,
+        "settings": get_processing_settings(),
+        "fonts": POPULAR_FONTS,
+        "devices": DEVICE_PROFILES
+    }
+
+@app.post("/api/processor/settings")
+async def save_processor_settings_endpoint(req: ProcessorSettingsRequest):
+    updated = save_processing_settings(req.settings)
+    add_log("INFO", "Сохранены новые настройки водяного знака и уникализатора видео")
+    return {
+        "success": True,
+        "settings": updated,
+        "message": "Настройки водяного знака и уникализации успешно сохранены!"
+    }
+
+@app.post("/api/processor/upload-watermark-media")
+async def upload_watermark_media_endpoint(file: UploadFile = File(...)):
+    """Handles upload of photo or video watermark via Drag & Drop."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не передан")
+
+    ext = Path(file.filename).suffix.lower()
+    allowed_images = [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+    allowed_videos = [".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"]
+
+    if ext not in allowed_images and ext not in allowed_videos:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Неподдерживаемый формат: {ext}. Допустимы изображения (PNG, JPG, WEBP, GIF) и видео (MP4, MOV, WEBM)"
+        )
+
+    media_type = "video" if ext in allowed_videos else "image"
+
+    # Clean previous watermark media file if present
+    cfg = get_processing_settings()
+    old_p = cfg.get("watermark_media_path")
+    if old_p and Path(old_p).is_file():
+        try:
+            Path(old_p).unlink()
+        except Exception:
+            pass
+
+    # Save new watermark file
+    safe_name = f"wm_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+    dest_path = WATERMARKS_DIR / safe_name
+
+    try:
+        with open(dest_path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                f.write(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения файла: {str(e)}")
+
+    # Update settings
+    updated = save_processing_settings({
+        "watermark_media_path": str(dest_path.resolve()),
+        "watermark_media_name": file.filename,
+        "watermark_media_type": media_type
+    })
+
+    add_log("INFO", f"Загружен медиа-вотемарк: {file.filename} ({media_type})")
+
+    return {
+        "success": True,
+        "message": f"Медиа-вотемарк '{file.filename}' успешно загружен!",
+        "media_name": file.filename,
+        "media_type": media_type,
+        "settings": updated
+    }
+
+@app.get("/api/processor/watermark-media-file")
+async def get_watermark_media_file():
+    """Returns the current watermark image/video for web panel preview."""
+    cfg = get_processing_settings()
+    p_str = cfg.get("watermark_media_path")
+    if not p_str or not Path(p_str).is_file():
+        raise HTTPException(status_code=404, detail="Медиа-вотемарк не установлен")
+
+    p = Path(p_str)
+    ext = p.suffix.lower()
+    if ext in [".mp4", ".mov", ".webm", ".mkv"]:
+        media_type = "video/mp4"
+    elif ext == ".jpg" or ext == ".jpeg":
+        media_type = "image/jpeg"
+    elif ext == ".png":
+        media_type = "image/png"
+    elif ext == ".webp":
+        media_type = "image/webp"
+    elif ext == ".gif":
+        media_type = "image/gif"
+    else:
+        media_type = "application/octet-stream"
+
+    return FileResponse(p, media_type=media_type)
+
+@app.delete("/api/processor/watermark-media")
+async def delete_watermark_media_endpoint():
+    """Removes current watermark media file."""
+    cfg = get_processing_settings()
+    p_str = cfg.get("watermark_media_path")
+    if p_str and Path(p_str).is_file():
+        try:
+            Path(p_str).unlink()
+        except Exception:
+            pass
+
+    updated = save_processing_settings({
+        "watermark_media_path": "",
+        "watermark_media_name": "",
+        "watermark_media_type": "image"
+    })
+
+    add_log("INFO", "Медиа-вотемарк удален")
+    return {
+        "success": True,
+        "message": "Медиа-вотемарк успешно удален",
+        "settings": updated
+    }
+
+@app.post("/api/processor/test")
+async def test_processor_endpoint(req: ProcessorTestRequest):
+    res = await run_test_processing(req.video_path)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Ошибка тестовой обработки видео"))
+    return res

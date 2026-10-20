@@ -36,6 +36,37 @@ from .tor import (
 )
 from .storage import add_log, get_tor_config
 
+def check_response_for_suspension(text: str, status_code: int = 200) -> Tuple[bool, str]:
+    """
+    Detects if wvids.com response indicates account suspension:
+    - Text phrases: 'account suspended', 'account is suspended', 'your account has been suspended', 'аккаунт заблокирован', 'account blocked'
+    - Redirection to /suspended
+    - 403 status with suspension notice
+    """
+    if not text:
+        return False, ""
+
+    t_lower = text.lower()
+    suspension_markers = [
+        "account suspended",
+        "account is suspended",
+        "your account has been suspended",
+        "this account is suspended",
+        "account suspended.",
+        "аккаунт заблокирован",
+        "аккаунт приостановлен",
+        "account blocked",
+        "/suspended"
+    ]
+    for marker in suspension_markers:
+        if marker in t_lower:
+            return True, "Account suspended"
+
+    if status_code == 403 and any(k in t_lower for k in ["suspend", "block", "bann"]):
+        return True, "Account suspended"
+
+    return False, ""
+
 class WvidsClient:
     def __init__(
         self,
@@ -137,6 +168,16 @@ class WvidsClient:
             res = session.get(URL_SETTINGS, timeout=15)
             html = res.text
 
+            is_susp, susp_reason = check_response_for_suspension(html, res.status_code)
+            if is_susp:
+                add_log("ERROR", f"🚨 Session verification: Аккаунт заблокирован на wvids.com ({susp_reason})")
+                return {
+                    "valid": False,
+                    "is_suspended": True,
+                    "error": susp_reason,
+                    "status_code": res.status_code
+                }
+
             # Look for uid in script: let userpageid = 3195151; or uid = 3195151;
             uid_match = re.search(r'(?:userpageid|uid)\s*=\s*(\d+)', html)
             uid = int(uid_match.group(1)) if uid_match else None
@@ -159,6 +200,15 @@ class WvidsClient:
             if not uid or not username:
                 res_main = session.get(URL_MAIN, timeout=15)
                 html_main = res_main.text
+                is_susp, susp_reason = check_response_for_suspension(html_main, res_main.status_code)
+                if is_susp:
+                    add_log("ERROR", f"🚨 Session verification: Аккаунт заблокирован на wvids.com ({susp_reason})")
+                    return {
+                        "valid": False,
+                        "is_suspended": True,
+                        "error": susp_reason,
+                        "status_code": res_main.status_code
+                    }
                 if not uid:
                     m = re.search(r'(?:userpageid|uid)\s*=\s*(\d+)', html_main)
                     if m: uid = int(m.group(1))
@@ -229,6 +279,11 @@ class WvidsClient:
                 },
                 timeout=15
             )
+
+            is_susp, susp_reason = check_response_for_suspension(res.text, res.status_code)
+            if is_susp:
+                add_log("ERROR", f"🚨 Статистика: Аккаунт заблокирован на wvids.com ({susp_reason})")
+                return {"success": False, "is_suspended": True, "error": susp_reason}
 
             if res.status_code != 200:
                 add_log("WARNING", f"Stats request failed with status {res.status_code}")
@@ -632,4 +687,32 @@ class WvidsClient:
             "updated_description": updated_desc,
             "errors": errors
         }
+
+    async def check_account_status(self, username: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Directly queries wvids.com to check whether account is active, suspended, or invalid.
+        """
+        session = self.get_session()
+        await human_jitter(0.2, 0.4)
+        try:
+            r = session.get(URL_SETTINGS, timeout=12)
+            is_susp, reason = check_response_for_suspension(r.text, r.status_code)
+            if is_susp:
+                add_log("ERROR", f"🚨 [ПРОВЕРКА СТАТУСА] Аккаунт заблокирован на wvids.com: {reason}")
+                return {"status": "suspended", "is_suspended": True, "reason": reason}
+
+            if username:
+                r_user = session.get(f"https://wvids.com/@{username}", timeout=12)
+                is_susp2, reason2 = check_response_for_suspension(r_user.text, r_user.status_code)
+                if is_susp2:
+                    add_log("ERROR", f"🚨 [ПРОВЕРКА СТАТУСА] Аккаунт @{username} заблокирован: {reason2}")
+                    return {"status": "suspended", "is_suspended": True, "reason": reason2}
+
+            # Check if authenticated
+            if r.status_code == 200 and ("userpageid" in r.text or "uid" in r.text):
+                return {"status": "active", "is_suspended": False, "reason": ""}
+
+            return {"status": "unauthorized", "is_suspended": False, "reason": "Сессия не авторизована"}
+        except Exception as e:
+            return {"status": "error", "is_suspended": False, "error": str(e)}
 

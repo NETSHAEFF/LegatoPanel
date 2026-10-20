@@ -40,6 +40,9 @@
                         <span class="status-dot" id="headerStatusDot"></span>
                         <span id="headerUsername">Не авторизован</span>
                         <span id="headerUid" style="color: var(--text-muted); font-size: 0.75rem;"></span>
+                        <span id="headerSuspendedBadge" style="display: none;" class="suspended-badge">
+                            ⛔ ЗАБЛОКИРОВАН
+                        </span>
                     </div>
                     <button class="btn btn-secondary btn-sm" id="btnRefreshStats" title="Обновить статистику">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -55,6 +58,41 @@
 
         <!-- Main Wrapper -->
         <main class="main-wrapper">
+            <!-- GLOBAL SUSPENDED ACCOUNT NOTIFICATION BANNER -->
+            <div id="accountSuspendedBanner" class="account-suspended-banner" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div style="display: flex; align-items: flex-start; gap: 1rem;">
+                        <div style="width: 48px; height: 48px; border-radius: 50%; background: rgba(239, 68, 68, 0.25); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; color: #ef4444; flex-shrink: 0; border: 1px solid rgba(239, 68, 68, 0.5);">
+                            🚨
+                        </div>
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.3rem;">
+                                <h3 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #ff6b6b; letter-spacing: 0.3px;">
+                                    ВНИМАНИЕ: АККАУНТ ЗАБЛОКИРОВАН (Account suspended)
+                                </h3>
+                                <span class="suspended-badge">
+                                    Account suspended
+                                </span>
+                            </div>
+                            <p style="margin: 0; font-size: 0.88rem; color: #fca5a5; line-height: 1.45;">
+                                Аккаунт <strong id="suspendedAccountName" style="color: #fff;">@username</strong> заблокирован на платформе wvids.com. Все операции выгрузки новых видео и редактирования постов остановлены.
+                            </p>
+                            <div style="margin-top: 0.4rem; font-size: 0.78rem; color: var(--text-muted);" id="suspendedAccountTime">
+                                Причина: <strong>Account suspended</strong> | Требуется сменить активный аккаунт
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.6rem; align-items: center;">
+                        <button class="btn btn-secondary btn-sm" id="btnCheckAccountStatus" style="border-color: rgba(239, 68, 68, 0.5); color: #fff;">
+                            🔄 Перепроверить статус
+                        </button>
+                        <button class="btn btn-primary btn-sm" id="btnSwitchSuspendedAccount" style="background: #ef4444; border-color: #dc2626;">
+                            👥 Сменить аккаунт
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Navigation Tabs -->
             <nav class="nav-tabs">
                 <button class="tab-btn active" data-tab="tab-dashboard">
@@ -71,6 +109,13 @@
                         <polygon points="5 3 19 12 5 21 5 3"></polygon>
                     </svg>
                     ⚡ Авто-выгрузка /videos
+                </button>
+                <button class="tab-btn" data-tab="tab-processing">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20h9"></path>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                    </svg>
+                    🎨 Водяной знак & Уникализация
                 </button>
                 <button class="tab-btn" data-tab="tab-redact">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -279,6 +324,18 @@
                         </div>
                     </div>
 
+                    <!-- Preprocessing Info Bar -->
+                    <div style="margin-top: 1rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; padding: 0.7rem 1rem; background: rgba(139, 92, 246, 0.08); border-radius: var(--radius-sm); border: 1px solid rgba(139, 92, 246, 0.25);">
+                        <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                            <span style="font-size: 0.85rem; font-weight: 600; color: #fff;">🎬 Обработка видео FFmpeg:</span>
+                            <span class="proc-status-badge on" id="batchWatermarkBadge">🎨 Водяной знак: Активен</span>
+                            <span class="proc-status-badge on" id="batchUniqueBadge">🛡️ Уникализация: Активна</span>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" id="btnGoToProcessing" type="button" style="padding: 0.35rem 0.8rem; font-size: 0.8rem;">
+                            ⚙️ Настроить водяной знак & уникализацию ➔
+                        </button>
+                    </div>
+
                     <!-- Live Message Box -->
                     <div id="batchMessageBox" style="margin-top: 1rem; padding: 0.75rem 1rem; background: rgba(0,0,0,0.25); border-radius: var(--radius-sm); font-size: 0.85rem; color: #cbd5e1; border-left: 3px solid var(--accent-cyan);">
                         Папка: <code id="batchFolderLabel">videos</code> — нажмите «Запустить публикацию очереди» для старта.
@@ -379,6 +436,9 @@
                             <textarea class="form-textarea" id="uploadDescInput" rows="2" placeholder="Описание для этого видео..."></textarea>
                         </div>
 
+                        <div id="uploadSuspendedWarning" style="display: none; margin-bottom: 1rem; padding: 0.85rem 1rem; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: var(--radius-sm); color: #fca5a5; font-size: 0.85rem; line-height: 1.4;">
+                            ⛔ <strong>Выгрузка заблокирована:</strong> Активный аккаунт заблокирован на wvids.com (Account suspended). Пожалуйста, выберите другой аккаунт во вкладке <strong>«Куки & Аккаунты»</strong>.
+                        </div>
                         <button class="btn btn-secondary" id="btnStartUpload" style="width: 100%;">
                             Выложить одиночный файл
                         </button>
@@ -432,6 +492,639 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: WATERMARK & UNIQUEIZER STUDIO -->
+            <section id="tab-processing" class="tab-content">
+                <!-- Top Header Banner -->
+                <div class="tor-status-card" style="margin-bottom: 1.5rem; background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(6, 182, 212, 0.1)); border-color: rgba(139, 92, 246, 0.35);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                        <div style="display: flex; align-items: center; gap: 0.85rem;">
+                            <div style="width: 48px; height: 48px; border-radius: var(--radius-md); background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan)); display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: #fff;">
+                                🎬
+                            </div>
+                            <div>
+                                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin-bottom: 0.2rem;">
+                                    Студия Водяного Знака и Уникализации Видео
+                                </h2>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">
+                                    Автоматическая обработка каждого ролика перед загрузкой через нативный <strong>FFmpeg</strong>. Водяной знак накладывается <strong>перед</strong> уникализацией, после чего сбиваются визуальные (pHash), акустические (Content ID) и файловые следы.
+                                </p>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.6rem;">
+                            <button class="btn btn-secondary btn-sm" id="btnResetProcSettings">
+                                🔄 Сбросить к дефолту
+                            </button>
+                            <button class="btn btn-primary btn-sm" id="btnSaveProcSettings">
+                                💾 Сохранить настройки
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <!-- LEFT COLUMN: CONTROLS & SETTINGS -->
+                    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                        
+                        <!-- CARD 1: WATERMARK SETTINGS -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                        <path d="M12 20h9"></path>
+                                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                    </svg>
+                                    1. Настройки Водяного Знака (Watermark Studio)
+                                </div>
+                            </div>
+
+                            <!-- Watermark Main Switch -->
+                            <div class="switch-row" style="margin-bottom: 1rem;">
+                                <div class="switch-label-group">
+                                    <span class="switch-title">Наложение водяного знака</span>
+                                    <span class="switch-desc">Впечатывать водяной знак (текст, фото или видео) в кадры перед уникализацией</span>
+                                </div>
+                                <label class="switch-toggle">
+                                    <input type="checkbox" id="procWmEnabled" checked>
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
+                            <!-- Watermark Mode Switcher: Both / Text / Media / None -->
+                            <div style="margin-bottom: 0.75rem;">
+                                <label class="form-label" style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent-cyan);">
+                                    Режим работы водяного знака:
+                                </label>
+                                <div class="wm-mode-selector" id="wmModeSelector">
+                                    <button type="button" class="wm-mode-btn" data-mode="both" id="wmModeBtnBoth">
+                                        <span>⚡</span> Все вместе
+                                    </button>
+                                    <button type="button" class="wm-mode-btn active" data-mode="text" id="wmModeBtnText">
+                                        <span>🔤</span> Только Текст
+                                    </button>
+                                    <button type="button" class="wm-mode-btn" data-mode="media" id="wmModeBtnMedia">
+                                        <span>🖼️</span> Только Медиа
+                                    </button>
+                                    <button type="button" class="wm-mode-btn" data-mode="none" id="wmModeBtnNone">
+                                        <span>🚫</span> Выкл
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div id="wmSettingsBody">
+                                
+                                <!-- ================= SECTION: TEXT WATERMARK ================= -->
+                                <div id="wmTextSection" style="padding: 1rem; background: rgba(15, 23, 42, 0.4); border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 1.25rem;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.5rem;">
+                                        <div style="font-weight: 700; color: #fff; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem;">
+                                            <span>🔤</span> Текстовый водяной знак
+                                        </div>
+                                        <span style="font-size: 0.72rem; color: var(--accent-cyan); background: rgba(6, 182, 212, 0.12); padding: 0.2rem 0.5rem; border-radius: 4px;">
+                                            Настраиваемый текст
+                                        </span>
+                                    </div>
+
+                                    <!-- Watermark Text -->
+                                    <div class="form-group">
+                                        <label class="form-label">Текст водяного знака</label>
+                                        <input type="text" class="form-input" id="procWmText" value="@wvids" placeholder="@mychannel">
+                                        <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.3rem; display: block;">
+                                            💡 Теги: <code>{username}</code> (никнейм активного аккаунта), <code>{title}</code> (название), <code>{date}</code> (текущая дата).
+                                        </span>
+                                    </div>
+
+                                    <!-- Font Selection & Size -->
+                                    <div style="display: grid; grid-template-columns: 1.5fr 1fr; gap: 1rem;">
+                                        <div class="form-group">
+                                            <label class="form-label">Шрифт (Font Family)</label>
+                                            <select class="form-select" id="procWmFont">
+                                                <option value="arial.ttf">Arial (Стандартный без засечек)</option>
+                                                <option value="arialbd.ttf">Arial Bold (Жирный акцентный)</option>
+                                                <option value="impact.ttf">Impact (Крупный заметный / мемный)</option>
+                                                <option value="segoeui.ttf">Segoe UI (Современный Clean)</option>
+                                                <option value="tahoma.ttf">Tahoma (Четкий компактный)</option>
+                                                <option value="trebuc.ttf">Trebuchet MS (Стильный Sans)</option>
+                                                <option value="calibri.ttf">Calibri (Мягкий универсальный)</option>
+                                                <option value="times.ttf">Times New Roman (Классический Serif)</option>
+                                                <option value="georgia.ttf">Georgia (Элегантный Serif)</option>
+                                                <option value="comic.ttf">Comic Sans MS (Неформальный)</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label class="form-label">Размер шрифта</label>
+                                            <div class="slider-row">
+                                                <input type="range" class="slider-input" id="procWmSize" min="16" max="96" value="36" step="2">
+                                                <span class="slider-badge" id="procWmSizeBadge">36px</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Text Color & Opacity -->
+                                    <div style="display: grid; grid-template-columns: 1fr 1.3fr; gap: 1rem;">
+                                        <div class="form-group">
+                                            <label class="form-label">Цвет текста</label>
+                                            <div class="color-picker-row">
+                                                <input type="color" class="color-circle-input" id="procWmColorPicker" value="#ffffff">
+                                                <input type="text" class="form-input" id="procWmColorText" value="#ffffff" style="text-transform: uppercase; font-family: monospace;">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label class="form-label">Непрозрачность текста</label>
+                                            <div class="slider-row" style="margin-top: 0.35rem;">
+                                                <input type="range" class="slider-input" id="procWmOpacity" min="0.1" max="1.0" step="0.05" value="0.9">
+                                                <span class="slider-badge" id="procWmOpacityBadge">90%</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Watermark Position -->
+                                    <div class="form-group">
+                                        <label class="form-label">Положение текста в кадре</label>
+                                        <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start;">
+                                            <div class="position-grid">
+                                                <button type="button" class="pos-btn" data-pos="top_left"><span class="arrow">↖</span><span class="label">Верх-Лево</span></button>
+                                                <button type="button" class="pos-btn" data-pos="top_center"><span class="arrow">↑</span><span class="label">Верх-Центр</span></button>
+                                                <button type="button" class="pos-btn" data-pos="top_right"><span class="arrow">↗</span><span class="label">Верх-Право</span></button>
+                                                <button type="button" class="pos-btn" data-pos="center"><span class="arrow">•</span><span class="label">Центр</span></button>
+                                                <button type="button" class="pos-btn" data-pos="bottom_left"><span class="arrow">↙</span><span class="label">Низ-Лево</span></button>
+                                                <button type="button" class="pos-btn" data-pos="bottom_center"><span class="arrow">↓</span><span class="label">Низ-Центр</span></button>
+                                                <button type="button" class="pos-btn active" data-pos="bottom_right"><span class="arrow">↘</span><span class="label">Низ-Право</span></button>
+                                            </div>
+                                            <div style="flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 0.6rem;">
+                                                <div>
+                                                    <span style="font-size: 0.75rem; color: var(--text-muted);">Отступ по горизонтали (X):</span>
+                                                    <div class="slider-row" style="margin-top: 0.2rem;">
+                                                        <input type="range" class="slider-input" id="procWmMarginX" min="0" max="120" value="30" step="5">
+                                                        <span class="slider-badge" id="procWmMarginXBadge">30px</span>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <span style="font-size: 0.75rem; color: var(--text-muted);">Отступ по вертикали (Y):</span>
+                                                    <div class="slider-row" style="margin-top: 0.2rem;">
+                                                        <input type="range" class="slider-input" id="procWmMarginY" min="0" max="120" value="30" step="5">
+                                                        <span class="slider-badge" id="procWmMarginYBadge">30px</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Background Box Toggle & Settings -->
+                                    <div style="margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                        <div class="switch-row" style="margin-bottom: 0.75rem;">
+                                            <div class="switch-label-group">
+                                                <span class="switch-title">Фон / Подложка под текст (Box)</span>
+                                                <span class="switch-desc">Контрастная плашка позади текста для читаемости на любом видео</span>
+                                            </div>
+                                            <label class="switch-toggle">
+                                                <input type="checkbox" id="procWmBoxEnabled" checked>
+                                                <span class="switch-slider"></span>
+                                            </label>
+                                        </div>
+
+                                        <div id="wmBoxSettingsGroup">
+                                            <div style="display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 1rem;">
+                                                <div class="form-group">
+                                                    <label class="form-label">Цвет фона</label>
+                                                    <div class="color-picker-row">
+                                                        <input type="color" class="color-circle-input" id="procWmBoxColorPicker" value="#000000">
+                                                        <input type="text" class="form-input" id="procWmBoxColorText" value="#000000" style="text-transform: uppercase; font-family: monospace;">
+                                                    </div>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label class="form-label">Непрозрачность фона</label>
+                                                    <div class="slider-row" style="margin-top: 0.35rem;">
+                                                        <input type="range" class="slider-input" id="procWmBoxOpacity" min="0.05" max="1.0" step="0.05" value="0.55">
+                                                        <span class="slider-badge" id="procWmBoxOpacityBadge">55%</span>
+                                                    </div>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label class="form-label">Отступ плашки</label>
+                                                    <div class="slider-row" style="margin-top: 0.35rem;">
+                                                        <input type="range" class="slider-input" id="procWmBoxBorder" min="2" max="30" step="2" value="10">
+                                                        <span class="slider-badge" id="procWmBoxBorderBadge">10px</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Text Timing Controls -->
+                                    <div style="margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem;">
+                                            <label class="form-label" style="margin: 0;">⏱️ Время появления текста вотермарка:</label>
+                                            <div style="display: flex; gap: 0.3rem;">
+                                                <button type="button" class="timing-preset-btn" id="btnPresetText0">0с (сразу)</button>
+                                                <button type="button" class="timing-preset-btn" id="btnPresetText2">2с</button>
+                                                <button type="button" class="timing-preset-btn" id="btnPresetText5">5с</button>
+                                            </div>
+                                        </div>
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                            <div>
+                                                <span style="font-size: 0.75rem; color: var(--text-muted);">Появление через (сек):</span>
+                                                <div class="slider-row" style="margin-top: 0.2rem;">
+                                                    <input type="range" class="slider-input" id="procWmStartTime" min="0" max="30" step="0.5" value="0">
+                                                    <span class="slider-badge" id="procWmStartTimeBadge">0.0с</span>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span style="font-size: 0.75rem; color: var(--text-muted);">Длительность показа (0 = до конца):</span>
+                                                <div class="slider-row" style="margin-top: 0.2rem;">
+                                                    <input type="range" class="slider-input" id="procWmDuration" min="0" max="60" step="1" value="0">
+                                                    <span class="slider-badge" id="procWmDurationBadge">До конца</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+
+                                <!-- ================= SECTION: MEDIA WATERMARK (PHOTO / VIDEO DRAG & DROP) ================= -->
+                                <div id="wmMediaSection" style="padding: 1rem; background: rgba(15, 23, 42, 0.4); border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 0.5rem;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.5rem;">
+                                        <div style="font-weight: 700; color: #fff; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem;">
+                                            <span>🖼️</span> Водяной знак из Фото или Видео (Drag & Drop)
+                                        </div>
+                                        <span style="font-size: 0.72rem; color: var(--accent-purple); background: rgba(139, 92, 246, 0.15); padding: 0.2rem 0.5rem; border-radius: 4px;">
+                                            PNG / JPG / WEBP / GIF / MP4 / MOV / WEBM
+                                        </span>
+                                    </div>
+
+                                    <!-- Active Media Card (visible when a file is uploaded) -->
+                                    <div id="wmMediaActiveCard" class="media-active-card" style="display: none;">
+                                        <div style="display: flex; align-items: center; gap: 0.85rem; overflow: hidden;">
+                                            <img id="wmMediaThumbImg" class="media-thumb-preview" src="" alt="Thumbnail" style="display: none;">
+                                            <video id="wmMediaThumbVideo" class="media-thumb-preview" autoplay loop muted playsinline style="display: none;"></video>
+                                            <div style="overflow: hidden;">
+                                                <div id="wmMediaFileName" style="font-weight: 600; color: #fff; font-size: 0.88rem; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                                                    watermark.png
+                                                </div>
+                                                <div style="display: flex; gap: 0.4rem; align-items: center; margin-top: 0.2rem;">
+                                                    <span id="wmMediaTypeBadge" style="font-size: 0.72rem; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); font-weight: 600;">
+                                                        Изображение
+                                                    </span>
+                                                    <span style="font-size: 0.72rem; color: var(--text-muted);">
+                                                        Готово к наложению
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button type="button" class="btn btn-secondary btn-sm" id="btnDeleteWmMedia" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.3); padding: 0.35rem 0.75rem; font-size: 0.8rem;">
+                                            🗑️ Удалить
+                                        </button>
+                                    </div>
+
+                                    <!-- Drag & Drop Upload Zone -->
+                                    <div class="media-dropzone" id="wmMediaDropzone">
+                                        <input type="file" id="procWmMediaFileInput" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" style="display: none;">
+                                        <div class="media-dropzone-icon">
+                                            📁
+                                        </div>
+                                        <div style="font-weight: 600; color: #fff; font-size: 0.9rem;">
+                                            Перетащите сюда фото или видео для вотермарка
+                                        </div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted);">
+                                            Или нажмите в любое место для выбора файла (PNG, JPG, WEBP, GIF, MP4, MOV, WEBM)
+                                        </div>
+                                    </div>
+
+                                    <!-- Media Watermark Controls -->
+                                    <div id="wmMediaControlsGroup" style="margin-top: 1.25rem;">
+                                        <!-- Scale & Opacity -->
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                            <div class="form-group">
+                                                <label class="form-label">Масштаб медиа (размер от ширины видео)</label>
+                                                <div class="slider-row">
+                                                    <input type="range" class="slider-input" id="procWmMediaScale" min="5" max="50" step="1" value="18">
+                                                    <span class="slider-badge" id="procWmMediaScaleBadge">18%</span>
+                                                </div>
+                                            </div>
+                                            <div class="form-group">
+                                                <label class="form-label">Непрозрачность медиа</label>
+                                                <div class="slider-row">
+                                                    <input type="range" class="slider-input" id="procWmMediaOpacity" min="0.1" max="1.0" step="0.05" value="0.85">
+                                                    <span class="slider-badge" id="procWmMediaOpacityBadge">85%</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Media Position -->
+                                        <div class="form-group">
+                                            <label class="form-label">Положение медиа-вотермарка в кадре</label>
+                                            <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start;">
+                                                <div class="position-grid" id="mediaPositionGrid">
+                                                    <button type="button" class="pos-btn media-pos-btn" data-pos="top_left"><span class="arrow">↖</span><span class="label">Верх-Лево</span></button>
+                                                    <button type="button" class="pos-btn media-pos-btn" data-pos="top_center"><span class="arrow">↑</span><span class="label">Верх-Центр</span></button>
+                                                    <button type="button" class="pos-btn media-pos-btn active" data-pos="top_right"><span class="arrow">↗</span><span class="label">Верх-Право</span></button>
+                                                    <button type="button" class="pos-btn media-pos-btn" data-pos="center"><span class="arrow">•</span><span class="label">Центр</span></button>
+                                                    <button type="button" class="pos-btn media-pos-btn" data-pos="bottom_left"><span class="arrow">↙</span><span class="label">Низ-Лево</span></button>
+                                                    <button type="button" class="pos-btn media-pos-btn" data-pos="bottom_center"><span class="arrow">↓</span><span class="label">Низ-Центр</span></button>
+                                                    <button type="button" class="pos-btn media-pos-btn" data-pos="bottom_right"><span class="arrow">↘</span><span class="label">Низ-Право</span></button>
+                                                </div>
+                                                <div style="flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 0.6rem;">
+                                                    <div>
+                                                        <span style="font-size: 0.75rem; color: var(--text-muted);">Отступ по горизонтали (X):</span>
+                                                        <div class="slider-row" style="margin-top: 0.2rem;">
+                                                            <input type="range" class="slider-input" id="procWmMediaMarginX" min="0" max="120" value="30" step="5">
+                                                            <span class="slider-badge" id="procWmMediaMarginXBadge">30px</span>
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <span style="font-size: 0.75rem; color: var(--text-muted);">Отступ по вертикали (Y):</span>
+                                                        <div class="slider-row" style="margin-top: 0.2rem;">
+                                                            <input type="range" class="slider-input" id="procWmMediaMarginY" min="0" max="120" value="30" step="5">
+                                                            <span class="slider-badge" id="procWmMediaMarginYBadge">30px</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Media Timing Controls -->
+                                        <div style="margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem;">
+                                                <label class="form-label" style="margin: 0;">⏱️ Время появления медиа-вотермарка в кадре:</label>
+                                                <div style="display: flex; gap: 0.3rem;">
+                                                    <button type="button" class="timing-preset-btn" id="btnPresetMedia0">0с (сразу)</button>
+                                                    <button type="button" class="timing-preset-btn" id="btnPresetMedia2">2с</button>
+                                                    <button type="button" class="timing-preset-btn" id="btnPresetMedia5">5с</button>
+                                                </div>
+                                            </div>
+                                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                                <div>
+                                                    <span style="font-size: 0.75rem; color: var(--text-muted);">Появление через (сек):</span>
+                                                    <div class="slider-row" style="margin-top: 0.2rem;">
+                                                        <input type="range" class="slider-input" id="procWmMediaStartTime" min="0" max="30" step="0.5" value="2.0">
+                                                        <span class="slider-badge" id="procWmMediaStartTimeBadge">2.0с</span>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <span style="font-size: 0.75rem; color: var(--text-muted);">Длительность показа (0 = до конца):</span>
+                                                    <div class="slider-row" style="margin-top: 0.2rem;">
+                                                        <input type="range" class="slider-input" id="procWmMediaDuration" min="0" max="60" step="1" value="0">
+                                                        <span class="slider-badge" id="procWmMediaDurationBadge">До конца</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <!-- CARD 2: VIDEO UNIQUEIZER SETTINGS -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2">
+                                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                                        <polyline points="2 17 12 22 22 17"></polyline>
+                                        <polyline points="2 12 12 17 22 12"></polyline>
+                                    </svg>
+                                    2. Уникализатор Видео (Video Uniqueizer)
+                                </div>
+                            </div>
+
+                            <!-- Uniqueizer Main Switch -->
+                            <div class="switch-row">
+                                <div class="switch-label-group">
+                                    <span class="switch-title">Глубокая уникализация видео</span>
+                                    <span class="switch-desc">Сбивание Perceptual Hash, метаданных и таймингов перед каждой выгрузкой</span>
+                                </div>
+                                <label class="switch-toggle">
+                                    <input type="checkbox" id="procUniqEnabled" checked>
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
+                            <div id="uniqSettingsBody">
+                                <!-- Duration Mode -->
+                                <div class="form-group">
+                                    <label class="form-label">Изменение хронометража (добавление или уменьшение секунд)</label>
+                                    <select class="form-select" id="procUniqDurMode">
+                                        <option value="random">🎲 Случайно (рандомное добавление или уменьшение секунд)</option>
+                                        <option value="add">➕ Добавление секунд (микро-стоп-кадр / паддинг в конце)</option>
+                                        <option value="trim">➖ Уменьшение секунд (микро-подрезка начала и конца)</option>
+                                        <option value="speed">⚡ Микро-сдвиг скорости (0.985x - 1.015x)</option>
+                                        <option value="none">🚫 Без изменения длительности</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group" id="uniqDurDeltaGroup">
+                                    <label class="form-label">Размер изменения длительности (секунды)</label>
+                                    <div class="slider-row">
+                                        <input type="range" class="slider-input" id="procUniqDurDelta" min="0.3" max="3.0" step="0.1" value="1.0">
+                                        <span class="slider-badge" id="procUniqDurDeltaBadge">1.0с</span>
+                                    </div>
+                                    <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; display: block;">
+                                        Сдвигает контрольные точки видео-идентификатора и временную сетку ключевых кадров.
+                                    </span>
+                                </div>
+
+                                <!-- Metadata & Device Spoofing -->
+                                <div class="switch-row">
+                                    <div class="switch-label-group">
+                                        <span class="switch-title">Смена метаданных и подмена устройства</span>
+                                        <span class="switch-desc">Очистка EXIF/контейнера, подделка под смартфоны, рандомизация дат Windows</span>
+                                    </div>
+                                    <label class="switch-toggle">
+                                        <input type="checkbox" id="procUniqMetadata" checked>
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+
+                                <div class="form-group" style="padding-left: 0.5rem;" id="uniqDeviceGroup">
+                                    <label class="form-label">Профиль смартфона для метаданных</label>
+                                    <select class="form-select" id="procUniqDevice">
+                                        <option value="random">🎲 Случайный смартфон (Apple / Samsung / Pixel / Sony)</option>
+                                        <option value="iphone15">🍎 Apple iPhone 15 Pro (Core Media Video)</option>
+                                        <option value="iphone14">🍎 Apple iPhone 14 Pro Max</option>
+                                        <option value="s24">📱 Samsung Galaxy S24 Ultra (OneUI 6.1)</option>
+                                        <option value="s23">📱 Samsung Galaxy S23 (OneUI 6.0)</option>
+                                        <option value="pixel8">🌐 Google Pixel 8 Pro (Android 14)</option>
+                                        <option value="xiaomi14">⚡ Xiaomi 14 (HyperOS)</option>
+                                        <option value="sony_a7">📷 Sony A7 IV (Sony Video)</option>
+                                    </select>
+                                </div>
+
+                                <!-- Perceptual Hash Jitter -->
+                                <div class="switch-row">
+                                    <div class="switch-label-group">
+                                        <span class="switch-title">Разрушение зрительного хэша (pHash / dHash)</span>
+                                        <span class="switch-desc">Микро-зум (1.8%), поворот (0.5°), виньетка и инверсия DCT через сдвиг гаммы</span>
+                                    </div>
+                                    <label class="switch-toggle">
+                                        <input type="checkbox" id="procUniqVisualHash" checked>
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+
+                                <!-- Dynamic Frame Noise -->
+                                <div class="switch-row">
+                                    <div class="switch-label-group">
+                                        <span class="switch-title">Динамический микро-шум сенсора</span>
+                                        <span class="switch-desc">Легкий шум на каждый кадр, сбивающий попиксельные контрольные суммы</span>
+                                    </div>
+                                    <label class="switch-toggle">
+                                        <input type="checkbox" id="procUniqNoise" checked>
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+
+                                <!-- Audio Content ID -->
+                                <div class="switch-row">
+                                    <div class="switch-label-group">
+                                        <span class="switch-title">Сбивание Audio Content ID (Акустические отпечатки)</span>
+                                        <span class="switch-desc">Микро-питч (+-20 центов без изменения темпа речи), 3-полосный EQ, микро-эхо</span>
+                                    </div>
+                                    <label class="switch-toggle">
+                                        <input type="checkbox" id="procUniqAudioHash" checked>
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                </div>
+
+                                <!-- Encoding Preset & Quality -->
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
+                                    <div class="form-group">
+                                        <label class="form-label">Скорость кодирования FFmpeg</label>
+                                        <select class="form-select" id="procUniqPreset">
+                                            <option value="ultrafast">Ultrafast (Молниеносная скорость)</option>
+                                            <option value="fast" selected>Fast (Рекомендуется, баланс)</option>
+                                            <option value="medium">Medium (Высокое сжатие)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Качество (CRF)</label>
+                                        <div class="slider-row">
+                                            <input type="range" class="slider-input" id="procUniqCrf" min="18" max="26" value="20" step="1">
+                                            <span class="slider-badge" id="procUniqCrfBadge">20</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- RIGHT COLUMN: LIVE PREVIEW & BENCHMARK -->
+                    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                        
+                        <!-- CARD 3: LIVE WATERMARK PREVIEW -->
+                        <div class="preview-stage-container">
+                            <div class="card-header" style="margin-bottom: 0.85rem;">
+                                <div class="card-title">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                    Интерактивный Живой Предпросмотр (Preview)
+                                </div>
+                                <div style="display: flex; gap: 0.35rem;">
+                                    <button class="btn btn-secondary btn-sm" id="btnPreviewBgCinema" title="Кинематографичный фон" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">🎬 Кино</button>
+                                    <button class="btn btn-secondary btn-sm" id="btnPreviewBgDark" title="Темный фон" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">🌑 Темный</button>
+                                    <button class="btn btn-secondary btn-sm" id="btnPreviewBgLight" title="Светлый фон" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">☀️ Светлый</button>
+                                    <button class="btn btn-secondary btn-sm" id="btnPreviewPlayTiming" title="Симуляция тайминга появления" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; border-color: rgba(6, 182, 212, 0.4); color: var(--accent-cyan);">▶️ Тест тайминга</button>
+                                </div>
+                            </div>
+
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+                                В реальном времени отображает шрифт, размер, цвет, прозрачность, фон и отступы водяного знака.
+                            </p>
+
+                            <!-- The Simulated 16:9 Screen -->
+                            <div class="preview-stage bg-cinema" id="previewStage">
+                                <!-- Watermark Media Element -->
+                                <div class="preview-stage-media-wm" id="previewMediaWatermark" style="display: none;">
+                                    <img id="previewMediaImg" src="" alt="Media WM" style="display: none;">
+                                    <video id="previewMediaVideo" src="" autoplay loop muted playsinline style="display: none;"></video>
+                                </div>
+                                <!-- Watermark Text Element -->
+                                <div class="preview-stage-watermark" id="previewWatermark">
+                                    @wvids
+                                </div>
+                                <!-- Subtle video play icon center watermark mock -->
+                                <div style="position: absolute; width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; pointer-events: none;">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="rgba(255,255,255,0.4)" stroke="none">
+                                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                    </svg>
+                                </div>
+                            </div>
+
+                            <!-- Pipeline Flow Indicator -->
+                            <div style="margin-top: 1.25rem; padding: 0.85rem 1rem; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 0.82rem;">
+                                <div style="font-weight: 600; color: #fff; margin-bottom: 0.4rem; display: flex; align-items: center; gap: 0.4rem;">
+                                    <span>⚙️ Порядок конвейера обработки:</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 0.4rem; color: var(--text-secondary); flex-wrap: wrap;">
+                                    <span style="color: var(--accent-cyan); font-weight: 600;">1. Водяной знак</span>
+                                    <span>➔</span>
+                                    <span style="color: var(--accent-purple); font-weight: 600;">2. Уникализация кадров/аудио</span>
+                                    <span>➔</span>
+                                    <span style="color: var(--accent-amber); font-weight: 600;">3. Подмена метаданных</span>
+                                    <span>➔</span>
+                                    <span style="color: var(--accent-green); font-weight: 600;">4. Загрузка через Tor</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- CARD 4: TEST BENCHMARK RUNNER -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2">
+                                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+                                    </svg>
+                                    Тестовая обработка FFmpeg (Верификация)
+                                </div>
+                            </div>
+
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">
+                                Запустите тестовую обработку на тестовом клипе, чтобы проверить скорость FFmpeg на вашем ПК, дистанцию Хэмминга pHash и подмену метаданных устройства.
+                            </p>
+
+                            <button class="btn btn-secondary" id="btnRunTestProc" style="width: 100%;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                Запустить тестовый прогон FFmpeg
+                            </button>
+
+                            <!-- Test Result Card (Hidden by default) -->
+                            <div id="testProcResultCard" style="display: none; margin-top: 1.25rem; padding: 1rem; background: rgba(16, 185, 129, 0.08); border-radius: var(--radius-sm); border: 1px solid rgba(16, 185, 129, 0.3);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                                    <span style="font-weight: 700; color: var(--accent-green); font-size: 0.95rem;">
+                                        ✅ Тест успешно завершен!
+                                    </span>
+                                    <span id="testProcTimeBadge" style="font-size: 0.8rem; color: #fff; font-family: monospace; background: rgba(0,0,0,0.4); padding: 0.2rem 0.5rem; border-radius: 4px;">
+                                        1.2с
+                                    </span>
+                                </div>
+
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.6rem; font-size: 0.82rem;">
+                                    <div style="background: rgba(0,0,0,0.25); padding: 0.5rem; border-radius: 4px;">
+                                        <div style="color: var(--text-muted); font-size: 0.75rem;">Сдвиг pHash:</div>
+                                        <div style="font-weight: 700; color: #fff;" id="testProcPhashDiff">15.6% (дистанция: 10 бит)</div>
+                                    </div>
+                                    <div style="background: rgba(0,0,0,0.25); padding: 0.5rem; border-radius: 4px;">
+                                        <div style="color: var(--text-muted); font-size: 0.75rem;">Хронометраж:</div>
+                                        <div style="font-weight: 700; color: #fff;" id="testProcDuration">2.5s ➔ 3.6s (+1.1s)</div>
+                                    </div>
+                                    <div style="background: rgba(0,0,0,0.25); padding: 0.5rem; border-radius: 4px;">
+                                        <div style="color: var(--text-muted); font-size: 0.75rem;">Устройство EXIF:</div>
+                                        <div style="font-weight: 700; color: #fff;" id="testProcDevice">iPhone 15 Pro</div>
+                                    </div>
+                                    <div style="background: rgba(0,0,0,0.25); padding: 0.5rem; border-radius: 4px;">
+                                        <div style="color: var(--text-muted); font-size: 0.75rem;">Размер файла:</div>
+                                        <div style="font-weight: 700; color: #fff;" id="testProcSize">91 KB ➔ 115 KB</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
             </section>
