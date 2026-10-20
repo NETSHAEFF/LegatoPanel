@@ -61,10 +61,11 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
 
 def find_tor_binary() -> Optional[Path]:
     """
-    Locates tor.exe across known paths, LocalAppData, Desktop Tor Browser, or system PATH.
+    Locates tor binary across known paths, LocalAppData, Desktop Tor Browser, or system PATH.
     """
+    bin_name = "tor.exe" if os.name == "nt" else "tor"
     candidates: List[Path] = []
-    # 1. LocalAppData Programs
+    # 1. LocalAppData Programs (Windows)
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if local_app_data:
         candidates.append(Path(local_app_data) / "Programs" / "Tor" / "tor.exe")
@@ -72,7 +73,7 @@ def find_tor_binary() -> Optional[Path]:
 
     # 2. Project local tor directory
     base_dir = Path(__file__).resolve().parent.parent
-    candidates.append(base_dir / "tor" / "tor.exe")
+    candidates.append(base_dir / "tor" / bin_name)
 
     # 3. Desktop Tor Browser
     desktop_candidates = [
@@ -81,10 +82,13 @@ def find_tor_binary() -> Optional[Path]:
     ]
     candidates.extend(desktop_candidates)
 
-    # 4. Standard Program Files
+    # 4. Standard Program Files (Windows) / Standard Linux Paths
     candidates.extend([
         Path("C:/Program Files/Tor/tor.exe"),
-        Path("C:/Program Files (x86)/Tor/tor.exe")
+        Path("C:/Program Files (x86)/Tor/tor.exe"),
+        Path("/usr/bin/tor"),
+        Path("/usr/local/bin/tor"),
+        Path("/usr/sbin/tor")
     ])
 
     for c in candidates:
@@ -107,13 +111,15 @@ def setup_standalone_tor_env(target_port: int = 9050) -> Tuple[Optional[Path], O
     if not tor_exe:
         return None, None
 
+    bin_name = "tor.exe" if os.name == "nt" else "tor"
+
     # Preferred base dir for standalone Tor
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     tor_dir = (Path(local_app_data) / "Programs" / "Tor") if local_app_data else (Path(__file__).resolve().parent.parent / "tor")
     tor_dir.mkdir(parents=True, exist_ok=True)
 
-    # Ensure tor.exe in tor_dir
-    local_tor_exe = tor_dir / "tor.exe"
+    # Ensure tor binary in tor_dir
+    local_tor_exe = tor_dir / bin_name
     if not local_tor_exe.exists() and tor_exe.exists():
         try:
             shutil.copy2(str(tor_exe), str(local_tor_exe))

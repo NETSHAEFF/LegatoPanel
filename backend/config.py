@@ -49,5 +49,5 @@ TOR_FALLBACK_PORT = 9150  # Tor Browser port
 TOR_STRICT_MODE = True    # Blocks non-Tor traffic to prevent real IP leaks
 
 # Standard Web Panel Server Settings
-HOST = "127.0.0.1"
-PORT = 8088
+HOST = os.environ.get("HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT", 80))
