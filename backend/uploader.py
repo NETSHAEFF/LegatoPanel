@@ -45,7 +45,8 @@ class ContentUploader:
         title: str = "",
         description: str = "",
         record_id: Optional[int] = None,
-        progress_callback: Optional[Callable[[str, int], None]] = None
+        progress_callback: Optional[Callable[[str, int], None]] = None,
+        account_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Full automated pipeline for uploading video or photo to wvids.com:
@@ -54,6 +55,15 @@ class ContentUploader:
         3. Custom Title & Description metadata attachment (both pre-share and post-share)
         4. Publication (share: 1)
         """
+        if not account_id:
+            try:
+                from .storage import get_active_account
+                active_acc = get_active_account()
+                if active_acc:
+                    account_id = active_acc.get("id")
+            except Exception:
+                account_id = None
+
         def report(msg: str, pct: int):
             if progress_callback:
                 progress_callback(msg, pct)

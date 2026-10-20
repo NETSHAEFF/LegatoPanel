@@ -341,7 +341,8 @@ async def upload_file_form(
         file_path=str(temp_path),
         title=title,
         description=description,
-        record_id=record_id
+        record_id=record_id,
+        account_id=active["id"]
     )
 
     if upload_result.get("success"):
@@ -391,7 +392,8 @@ async def upload_local_path(req: LocalPathUploadRequest):
         file_path=str(p.resolve()),
         title=req.title or "",
         description=req.description or "",
-        record_id=record_id
+        record_id=record_id,
+        account_id=active["id"]
     )
 
     if upload_result.get("success"):

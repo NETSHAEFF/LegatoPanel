@@ -244,7 +244,8 @@ class BatchUploadWorker:
                     file_path=file_path,
                     title=title,
                     description=description,
-                    record_id=record_id
+                    record_id=record_id,
+                    account_id=account["id"]
                 )
 
                 # Check Duplicate
