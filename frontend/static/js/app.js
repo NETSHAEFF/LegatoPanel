@@ -3148,3 +3148,99 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 });
+
+
+// --- VLESS Config Updater Modal Handlers ---
+window.openVlessConfigModal = async function() {
+    const modal = document.getElementById("vlessConfigModal");
+    const textarea = document.getElementById("vlessConfigTextarea");
+    if (!modal) return;
+
+    modal.style.display = "flex";
+    if (textarea && !textarea.value.trim()) {
+        try {
+            const res = await fetch("/api/vless/config");
+            const data = await res.json();
+            if (data.success && data.content) {
+                textarea.value = data.content;
+            }
+        } catch (e) {
+            console.error("Failed to load current vpn config:", e);
+        }
+    }
+};
+
+window.closeVlessConfigModal = function() {
+    const modal = document.getElementById("vlessConfigModal");
+    if (modal) modal.style.display = "none";
+};
+
+window.handleVlessFileSelect = function(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const textarea = document.getElementById("vlessConfigTextarea");
+        if (textarea) textarea.value = e.target.result;
+        showToast(`Файл '${file.name}' загружен в поле ввода`, "info");
+    };
+    reader.readAsText(file);
+};
+
+window.applyVlessConfigSubmit = async function() {
+    const textarea = document.getElementById("vlessConfigTextarea");
+    const btn = document.getElementById("btnApplyVlessConfig");
+    const configText = textarea ? textarea.value.trim() : "";
+
+    if (!configText) {
+        showToast("Пожалуйста, вставьте ссылку vless:// или JSON-конфиг", "warning");
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳</span> Применение конфига...';
+    }
+
+    showToast("Применение нового конфига VPN и перезапуск Xray...", "info");
+
+    try {
+        const res = await fetch("/api/vless/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ config: configText })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            const conn = data.connection || {};
+            const flag = typeof getCountryFlagEmoji === 'function' ? getCountryFlagEmoji(conn.country_code) : '🌐';
+            showToast(`✅ Конфиг применен! Новый IP: ${conn.ip || 'OK'} (${flag} ${conn.country || 'OK'})`, "success");
+            closeVlessConfigModal();
+            await loadNetworkStatus();
+            await loadLogs();
+        } else {
+            showToast(data.detail || data.error || "Ошибка применения конфигурации", "error");
+        }
+    } catch (err) {
+        showToast("Ошибка запроса: " + err.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '⚡ Сохранить и применить';
+        }
+    }
+};
+
+// Close modal when clicking outside of dialog
+document.addEventListener("DOMContentLoaded", function() {
+    const modal = document.getElementById("vlessConfigModal");
+    if (modal) {
+        modal.addEventListener("click", function(e) {
+            if (e.target === modal) {
+                closeVlessConfigModal();
+            }
+        });
+    }
+});

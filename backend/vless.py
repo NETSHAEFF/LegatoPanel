@@ -1,9 +1,12 @@
 import os
 import sys
 import time
+import json
+import shutil
 import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs, unquote
 from typing import Dict, Any, Optional, List
 from curl_cffi import requests
 
@@ -224,6 +227,15 @@ class VlessManager:
             return {"success": True, "message": f"Процесс VLESS (PID: {pid}) остановлен"}
         return {"success": True, "message": "Процесс VLESS не был запущен панелью"}
 
+    def restart(self, port: int = VLESS_DEFAULT_PORT, wait_seconds: int = 15) -> Dict[str, Any]:
+        """
+        Stops active VLESS process and starts fresh with updated config.
+        """
+        add_log("INFO", f"⚡ Перезапуск службы VLESS (порт {port})...")
+        self.stop()
+        time.sleep(1.0)
+        return self.start(port=port, wait_seconds=wait_seconds)
+
     def ensure_running(self, port: int = VLESS_DEFAULT_PORT) -> bool:
         if is_port_open("127.0.0.1", port, timeout=0.5):
             return True
@@ -316,3 +328,184 @@ def check_vless_connection(port: int = VLESS_DEFAULT_PORT, timeout: int = 10) ->
             "latency_ms": elapsed_ms,
             "error": f"Ошибка соединения через VLESS ({proxy_url}): {str(e)}"
         }
+
+def parse_vless_url_to_xray_config(url_str: str, socks_port: int = 10808, http_port: int = 10809) -> Dict[str, Any]:
+    clean_url = url_str.strip()
+    if not clean_url.startswith("vless://"):
+        raise ValueError("Ссылка должна начинаться с 'vless://'")
+
+    u = urlparse(clean_url)
+    uuid = u.username
+    host = u.hostname
+    port = u.port or 443
+
+    if not uuid or not host:
+        raise ValueError("В ссылке VLESS не найден UUID или адрес хоста")
+
+    qs = {k: v[0] for k, v in parse_qs(u.query).items()}
+    security = qs.get("security", "reality")
+    flow = qs.get("flow", "xtls-rprx-vision")
+    sni = qs.get("sni") or qs.get("serverName") or host
+    fp = qs.get("fp") or qs.get("fingerprint") or "chrome"
+    pbk = qs.get("pbk") or qs.get("publicKey") or ""
+    sid = qs.get("sid") or qs.get("shortId") or ""
+    net_type = qs.get("type") or qs.get("network") or "tcp"
+    remarks = unquote(u.fragment) if u.fragment else f"{host}:{port}"
+
+    stream_settings: Dict[str, Any] = {
+        "network": net_type,
+        "security": security,
+    }
+
+    if security == "reality":
+        stream_settings["realitySettings"] = {
+            "fingerprint": fp,
+            "publicKey": pbk,
+            "serverName": sni,
+            "shortId": sid
+        }
+    elif security == "tls":
+        stream_settings["tlsSettings"] = {
+            "serverName": sni,
+            "allowInsecure": False
+        }
+
+    if net_type == "tcp":
+        stream_settings["tcpSettings"] = {"header": {"type": "none"}}
+    elif net_type == "ws":
+        stream_settings["wsSettings"] = {"path": qs.get("path", "/"), "headers": {"Host": sni}}
+    elif net_type == "grpc":
+        stream_settings["grpcSettings"] = {"serviceName": qs.get("serviceName", "")}
+
+    config: Dict[str, Any] = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [
+            {
+                "listen": "127.0.0.1",
+                "port": socks_port,
+                "protocol": "socks",
+                "settings": {"auth": "noauth", "udp": True, "userLevel": 8},
+                "sniffing": {"destOverride": ["http", "tls", "quic"], "enabled": True, "routeOnly": False},
+                "tag": "socks"
+            },
+            {
+                "listen": "127.0.0.1",
+                "port": http_port,
+                "protocol": "http",
+                "settings": {"userLevel": 8},
+                "tag": "http"
+            }
+        ],
+        "outbounds": [
+            {
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [
+                        {
+                            "address": host,
+                            "port": port,
+                            "users": [
+                                {
+                                    "encryption": "none",
+                                    "flow": flow,
+                                    "id": uuid
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "streamSettings": stream_settings,
+                "tag": "proxy"
+            },
+            {"protocol": "freedom", "settings": {"domainStrategy": "UseIP"}, "tag": "direct"},
+            {"protocol": "blackhole", "settings": {"response": {"type": "http"}}, "tag": "block"}
+        ],
+        "remarks": remarks,
+        "routing": {
+            "domainStrategy": "IPIfNonMatch",
+            "rules": [
+                {"ip": ["geoip:private"], "outboundTag": "direct"},
+                {"network": "tcp,udp", "outboundTag": "proxy"}
+            ]
+        }
+    }
+    return config
+
+def get_vpn_config_content() -> str:
+    if VPN_TXT_PATH.exists():
+        try:
+            return VPN_TXT_PATH.read_text(encoding="utf-8")
+        except Exception:
+            return ""
+    return ""
+
+def apply_vpn_config_content(raw_input: str) -> Dict[str, Any]:
+    content = raw_input.strip()
+    if not content:
+        return {"success": False, "error": "Передана пустая конфигурация"}
+
+    parsed_config: Optional[Dict[str, Any]] = None
+    remarks = ""
+
+    # Check if vless:// URL
+    if content.startswith("vless://"):
+        try:
+            parsed_config = parse_vless_url_to_xray_config(content, socks_port=10808, http_port=10809)
+            remarks = parsed_config.get("remarks", "")
+        except Exception as e:
+            return {"success": False, "error": f"Ошибка разбора VLESS ссылки: {str(e)}"}
+    else:
+        # Check if raw JSON
+        try:
+            cfg = json.loads(content)
+            # Ensure inbounds have socks 10808
+            inbounds = cfg.get("inbounds", [])
+            has_socks_10808 = False
+            for ib in inbounds:
+                if ib.get("protocol") == "socks" and ib.get("port") == 10808:
+                    has_socks_10808 = True
+                    break
+            if not has_socks_10808:
+                inbounds.insert(0, {
+                    "listen": "127.0.0.1",
+                    "port": 10808,
+                    "protocol": "socks",
+                    "settings": {"auth": "noauth", "udp": True, "userLevel": 8},
+                    "tag": "socks"
+                })
+                cfg["inbounds"] = inbounds
+
+            parsed_config = cfg
+            remarks = cfg.get("remarks", "")
+        except Exception as e:
+            return {"success": False, "error": f"Неверный формат конфигурации (ожидается ссылка vless:// или валидный JSON): {str(e)}"}
+
+    # Backup previous vpn.txt
+    if VPN_TXT_PATH.exists():
+        try:
+            backup_file = DATA_DIR / "vpn_backup.txt"
+            shutil.copy2(str(VPN_TXT_PATH), str(backup_file))
+        except Exception:
+            pass
+
+    # Save to vpn.txt
+    try:
+        json_str = json.dumps(parsed_config, indent=4, ensure_ascii=False)
+        VPN_TXT_PATH.write_text(json_str, encoding="utf-8")
+        add_log("SUCCESS", f"⚡ Файл vpn.txt успешно обновлен! (Конфиг: {remarks or 'VLESS'})")
+    except Exception as e:
+        return {"success": False, "error": f"Не удалось записать vpn.txt: {str(e)}"}
+
+    # Restart VLESS
+    restart_res = vless_manager.restart(port=10808)
+
+    # Check new connection
+    conn_info = check_vless_connection(port=10808, timeout=8)
+
+    return {
+        "success": True,
+        "message": f"Конфигурация VPN успешно применена! ({remarks or 'VLESS'})",
+        "remarks": remarks,
+        "restart_result": restart_res,
+        "connection": conn_info
+    }

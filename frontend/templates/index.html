@@ -1510,6 +1510,9 @@
                             </div>
                         </div>
                         <div style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary btn-sm" id="btnOpenVlessConfig" onclick="openVlessConfigModal()" style="display: inline-flex; align-items: center; gap: 0.4rem;" title="Вставить новую ссылку vless:// или загрузить JSON конфиг">
+                                <span>📥</span> Обновить конфиг VPN
+                            </button>
                             <button class="btn btn-primary btn-sm" id="btnTestVless" onclick="testVlessConnection()" style="background: rgba(16, 185, 129, 0.25); border: 1px solid rgba(16, 185, 129, 0.5); color: #34d399;">
                                 <span>🔍</span> Проверить связь VLESS
                             </button>
@@ -1804,6 +1807,47 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- VLESS CONFIG MODAL -->
+    <div id="vlessConfigModal" style="display: none; position: fixed; inset: 0; background: rgba(10, 15, 29, 0.85); backdrop-filter: blur(8px); z-index: 9999; justify-content: center; align-items: center; padding: 1.5rem;">
+        <div style="background: #111827; border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 14px; width: 100%; max-width: 680px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8); overflow: hidden; display: flex; flex-direction: column;">
+            
+            <div style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span style="font-size: 1.5rem;">📥</span>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #fff;">Обновление конфигурации VLESS / VPN</h3>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Поддерживаются ссылки vless:// (Reality / XTLS) и JSON-конфигурации Xray</div>
+                    </div>
+                </div>
+                <button type="button" onclick="closeVlessConfigModal()" style="background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; padding: 0.2rem 0.5rem; line-height: 1;">&times;</button>
+            </div>
+
+            <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                    <label class="form-label" style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                        <span>Вставьте VLESS ссылку или JSON конфиг:</span>
+                        <a href="javascript:void(0)" onclick="document.getElementById('vlessFileInput').click()" style="color: var(--accent-green); text-decoration: none; font-size: 0.8rem; font-weight: 600;">
+                            📁 Загрузить из файла (.txt / .json)
+                        </a>
+                    </label>
+                    <input type="file" id="vlessFileInput" accept=".txt,.json" style="display: none;" onchange="handleVlessFileSelect(event)">
+                    <textarea id="vlessConfigTextarea" rows="8" class="form-input" style="font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45; width: 100%; resize: vertical; background: rgba(0, 0, 0, 0.35); border-color: rgba(255, 255, 255, 0.15);" placeholder="Вставьте ссылку vless://... (например от бота или панели) или сырой JSON конфиг"></textarea>
+                </div>
+
+                <div style="background: rgba(16, 185, 129, 0.08); border-left: 3px solid var(--accent-green); padding: 0.8rem 1rem; border-radius: 4px; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5;">
+                    💡 <strong>Подсказка:</strong> При сохранении система автоматически сделает бэкап текущего конфига, перезапустит Xray и проверит соединение с новым сервером.
+                </div>
+            </div>
+
+            <div style="padding: 1rem 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: flex-end; gap: 0.75rem; background: rgba(0, 0, 0, 0.2);">
+                <button type="button" class="btn btn-secondary" onclick="closeVlessConfigModal()">Отмена</button>
+                <button type="button" class="btn btn-primary" id="btnApplyVlessConfig" onclick="applyVlessConfigSubmit()" style="background: var(--accent-green); color: #000; font-weight: 700;">
+                    ⚡ Сохранить и применить
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Toast Notifications Container -->

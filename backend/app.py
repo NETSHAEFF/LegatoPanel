@@ -34,7 +34,9 @@ from .tor import (
 )
 from .vless import (
     vless_manager,
-    check_vless_connection
+    check_vless_connection,
+    get_vpn_config_content,
+    apply_vpn_config_content
 )
 from .storage import (
     get_all_accounts,
@@ -742,6 +744,38 @@ async def start_vless_endpoint():
 async def stop_vless_endpoint():
     res = vless_manager.stop()
     return res
+
+class VlessUpdateConfigRequest(BaseModel):
+    config: str  # Can be 'vless://...' URL or raw JSON text
+
+@app.get("/api/vless/config")
+async def get_vless_config_endpoint():
+    content = get_vpn_config_content()
+    return {
+        "success": True,
+        "content": content
+    }
+
+@app.post("/api/vless/config")
+async def update_vless_config_endpoint(req: VlessUpdateConfigRequest):
+    res = apply_vpn_config_content(req.config)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Ошибка применения конфигурации"))
+    return res
+
+@app.post("/api/vless/config/upload")
+async def upload_vless_config_file(file: UploadFile = File(...)):
+    try:
+        raw_bytes = await file.read()
+        content = raw_bytes.decode("utf-8", errors="replace")
+        res = apply_vpn_config_content(content)
+        if not res.get("success"):
+            raise HTTPException(status_code=400, detail=res.get("error", "Ошибка применения файла"))
+        return res
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Файл должен быть текстовым в кодировке UTF-8")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка загрузки файла: {str(e)}")
 
 # Tor Network Management
 class TorConfigRequest(BaseModel):
