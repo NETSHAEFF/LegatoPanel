@@ -170,12 +170,25 @@ def setup_standalone_tor_env(target_port: int = 9050) -> Tuple[Optional[Path], O
     geoip_line = f"GeoIPFile {str(tor_dir / 'geoip').replace('\\', '/')}" if (tor_dir / "geoip").exists() else ""
     geoip6_line = f"GeoIPv6File {str(tor_dir / 'geoip6').replace('\\', '/')}" if (tor_dir / "geoip6").exists() else ""
 
+    # Geo Exit Nodes Configuration ({us}, {de}, {ru}, etc.)
+    cfg = get_tor_config()
+    exit_country = (cfg.get("exit_country") or "all").strip().lower()
+    strict_nodes = cfg.get("strict_nodes", True)
+
+    exit_nodes_line = ""
+    if exit_country and exit_country not in ("all", "auto", "any", "*", ""):
+        codes = [c.strip().strip("{}").lower() for c in exit_country.replace(";", ",").split(",") if c.strip().strip("{}")]
+        if codes:
+            formatted = ",".join(f"{{{c}}}" for c in codes)
+            exit_nodes_line = f"ExitNodes {formatted}\nStrictNodes {'1' if strict_nodes else '0'}"
+
     log_file = str(tor_dir / "tor.log").replace('\\', '/')
     torrc_content = f"""# Standalone Headless Tor Config for Wvids Studio Pro
 SocksPort {target_port}
 DataDirectory {str(data_dir).replace('\\', '/')}
 {geoip_line}
 {geoip6_line}
+{exit_nodes_line}
 {pt_line}
 Bridge obfs4 51.89.228.250:21668 BA8BD67D8898CF378D4F73821DEB5657F4BB98DF cert=bEpLLgOwJ9fOJbeHb5r+ronUF2ck5nRd0Jl3zuy7rLoUp732QK2p/CUHjTAfBPCGfcVtSA iat-mode=0
 Bridge obfs4 51.89.231.85:24526 A44162645CEAA39C7106C49A3F36FD99FF8D8A00 cert=cVNRBh1enpvEGxA0ouu568EDFhWPl9taldydYgiJk77OX4MzoYIRz3qx4q7yHL5bRN60Gg iat-mode=0
@@ -354,6 +367,15 @@ class HeadlessTorManager:
             return {"success": True, "message": f"Фоновый процесс Tor (PID: {pid}) остановлен"}
         return {"success": True, "message": "Фоновый процесс Tor не был активен"}
 
+    def restart(self, port: int = 9050, wait_seconds: int = 25) -> Dict[str, Any]:
+        """
+        Stops the running Tor process, updates torrc configuration, and restarts Tor.
+        """
+        add_log("INFO", f"🧅 Перезапуск Tor с обновленными настройками ГЕО (порт {port})...")
+        self.stop()
+        time.sleep(1.0)
+        return self.start(port=port, wait_seconds=wait_seconds)
+
     def ensure_running(self, port: int = 9050) -> bool:
         """
         Ensures Tor is active on 9050 or 9150. If not, auto-starts headless Tor.
@@ -453,10 +475,27 @@ def check_tor_connection(port: Optional[int] = None, timeout: int = 15) -> Dict[
                 "proxy_url": proxy_url
             }
 
+        # Determine Country and City for visual verification of ExitNodes
+        country = "Unknown"
+        country_code = ""
+        city = ""
+        try:
+            r_geo = s.get("http://ip-api.com/json", timeout=6)
+            if r_geo.status_code == 200:
+                geo = r_geo.json()
+                country = geo.get("country") or "Unknown"
+                country_code = (geo.get("countryCode") or "").upper()
+                city = geo.get("city") or ""
+        except Exception:
+            pass
+
         return {
             "connected": True,
             "is_tor": is_tor,
             "ip": ip,
+            "country": country,
+            "country_code": country_code,
+            "city": city,
             "port": port,
             "latency_ms": elapsed_ms,
             "proxy_url": proxy_url,

@@ -380,19 +380,32 @@ def get_tor_config() -> Dict[str, Any]:
         port = 9150
     strict = get_setting("tor_strict", "1") == "1"
     host = get_setting("tor_host", "127.0.0.1")
+    exit_country = get_setting("tor_exit_country", "all")
+    strict_nodes = get_setting("tor_strict_nodes", "1") == "1"
     return {
         "enabled": enabled,
         "port": port,
         "host": host,
         "strict": strict,
+        "exit_country": exit_country,
+        "strict_nodes": strict_nodes,
         "proxy_url": f"socks5h://{host}:{port}"
     }
 
-def save_tor_config(enabled: bool, port: int, strict: bool = True, host: str = "127.0.0.1"):
+def save_tor_config(
+    enabled: bool,
+    port: int,
+    strict: bool = True,
+    host: str = "127.0.0.1",
+    exit_country: str = "all",
+    strict_nodes: bool = True
+):
     set_setting("tor_enabled", "1" if enabled else "0")
     set_setting("tor_port", str(port))
     set_setting("tor_host", host)
     set_setting("tor_strict", "1" if strict else "0")
+    set_setting("tor_exit_country", exit_country.strip().lower() if exit_country else "all")
+    set_setting("tor_strict_nodes", "1" if strict_nodes else "0")
 
 DEFAULT_PROCESSING_SETTINGS: Dict[str, Any] = {
     # Watermark General Mode

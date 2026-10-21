@@ -653,6 +653,8 @@ class TorConfigRequest(BaseModel):
     enabled: bool
     port: int
     strict: Optional[bool] = True
+    exit_country: Optional[str] = "all"
+    strict_nodes: Optional[bool] = True
 
 class TorTestRequest(BaseModel):
     port: Optional[int] = None
@@ -669,12 +671,28 @@ async def get_tor_configuration():
 
 @app.post("/api/tor/config")
 async def update_tor_configuration(req: TorConfigRequest):
-    save_tor_config(enabled=req.enabled, port=req.port, strict=bool(req.strict))
-    add_log("INFO", f"Настройки Tor обновлены: enabled={req.enabled}, port={req.port}, strict={req.strict}")
+    old_cfg = get_tor_config()
+    exit_country_clean = (req.exit_country or "all").strip().lower()
+    save_tor_config(
+        enabled=req.enabled,
+        port=req.port,
+        strict=bool(req.strict),
+        exit_country=exit_country_clean,
+        strict_nodes=bool(req.strict_nodes)
+    )
+
+    geo_changed = (old_cfg.get("exit_country") != exit_country_clean) or (old_cfg.get("strict_nodes") != bool(req.strict_nodes))
+    restart_result = None
+    if geo_changed and req.enabled and req.port == 9050:
+        restart_result = tor_manager.restart(port=9050)
+
+    add_log("INFO", f"Настройки Tor обновлены: enabled={req.enabled}, port={req.port}, exit_country={exit_country_clean}, strict_nodes={req.strict_nodes}")
     return {
         "success": True,
         "config": get_tor_config(),
-        "message": "Настройки маршрутизации Tor сохранены"
+        "geo_changed": geo_changed,
+        "restart_result": restart_result,
+        "message": f"Настройки маршрутизации сохранены (ГЕО: {exit_country_clean.upper() if exit_country_clean != 'all' else 'Авто'})"
     }
 
 @app.get("/api/tor/status")
@@ -688,6 +706,8 @@ async def get_tor_status():
         "success": True,
         "tor_enabled": cfg.get("enabled", True),
         "tor_strict": cfg.get("strict", True),
+        "exit_country": cfg.get("exit_country", "all"),
+        "strict_nodes": cfg.get("strict_nodes", True),
         "status": status,
         "service": service_status
     }
@@ -707,6 +727,13 @@ async def start_tor_service_endpoint():
 @app.post("/api/tor/service/stop")
 async def stop_tor_service_endpoint():
     res = tor_manager.stop()
+    return res
+
+@app.post("/api/tor/service/restart")
+async def restart_tor_service_endpoint():
+    cfg = get_tor_config()
+    port = cfg.get("port", 9050)
+    res = tor_manager.restart(port=port)
     return res
 
 @app.post("/api/tor/test")

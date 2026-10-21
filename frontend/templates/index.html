@@ -1493,6 +1493,13 @@
                         </div>
 
                         <div class="tor-metric-item">
+                            <div class="tor-metric-title">ГЕО выхода (Страна)</div>
+                            <div class="tor-metric-value" id="torCountryValue" style="color: #fff; font-size: 0.95rem;">
+                                🌐 Определение...
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
                             <div class="tor-metric-title">Подтверждение Tor Project</div>
                             <div class="tor-metric-value" id="torIsTorValue" style="color: var(--accent-green);">
                                 Да (IsTor: true)
@@ -1537,15 +1544,48 @@
                             <input type="number" class="form-input" id="torCustomPortInput" value="9150" min="1024" max="65535">
                         </div>
 
+                        <div style="flex: 1; min-width: 200px;">
+                            <label class="form-label" style="margin-bottom: 0.4rem;">Фиксация ГЕО (Exit Country)</label>
+                            <select class="form-select" id="torExitCountrySelect">
+                                <option value="all">🌐 Любая страна (По умолчанию)</option>
+                                <option value="ru">🇷🇺 Россия ({ru})</option>
+                                <option value="us">🇺🇸 США ({us})</option>
+                                <option value="de">🇩🇪 Германия ({de})</option>
+                                <option value="nl">🇳🇱 Нидерланды ({nl})</option>
+                                <option value="fr">🇫🇷 Франция ({fr})</option>
+                                <option value="gb">🇬🇧 Великобритания ({gb})</option>
+                                <option value="pl">🇵🇱 Польша ({pl})</option>
+                                <option value="ca">🇨🇦 Канада ({ca})</option>
+                                <option value="se">🇸🇪 Швеция ({se})</option>
+                                <option value="ch">🇨🇭 Швейцария ({ch})</option>
+                                <option value="custom">Указать свои коды стран...</option>
+                            </select>
+                        </div>
+
+                        <div id="torCustomCountryContainer" style="display: none; width: 160px;">
+                            <label class="form-label" style="margin-bottom: 0.4rem;">Коды (ISO)</label>
+                            <input type="text" class="form-input" id="torCustomCountryInput" placeholder="ru,de,nl" value="">
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.6rem; padding-bottom: 0.4rem;">
+                            <input type="checkbox" id="torStrictNodesSwitch" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-cyan);">
+                            <label for="torStrictNodesSwitch" style="font-size: 0.85rem; color: #fff; cursor: pointer; user-select: none;" title="Запретить Tor переключаться на ноды других стран">
+                                StrictNodes (Строго выбранное ГЕО)
+                            </label>
+                        </div>
+
                         <div style="display: flex; align-items: center; gap: 0.6rem; padding-bottom: 0.4rem;">
                             <input type="checkbox" id="torStrictSwitch" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-cyan);">
                             <label for="torStrictSwitch" style="font-size: 0.85rem; color: #fff; cursor: pointer; user-select: none;">
-                                Kill Switch (блокировать трафик при недоступности Tor)
+                                Kill Switch
                             </label>
                         </div>
 
                         <button class="btn btn-secondary btn-sm" id="btnSaveTorSettings" style="margin-bottom: 0.2rem;">
-                            Сохранить настройки Tor
+                            Сохранить настройки
+                        </button>
+                        <button class="btn btn-primary btn-sm" id="btnRestartTorService" style="margin-bottom: 0.2rem;" title="Перезапустить Tor для мгновенной смены IP/ГЕО">
+                            🔄 Сменить IP / ГЕО
                         </button>
                     </div>
                 </div>

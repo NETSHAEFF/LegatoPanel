@@ -814,6 +814,29 @@ async function loadTorConfig() {
 
             const uploadRoute = document.getElementById("uploadTorRouteText");
             if (uploadRoute) uploadRoute.textContent = `127.0.0.1:${cfg.port}`;
+
+            // Load Exit Country & StrictNodes
+            const countrySelect = document.getElementById("torExitCountrySelect");
+            const customCountryInput = document.getElementById("torCustomCountryInput");
+            const customCountryContainer = document.getElementById("torCustomCountryContainer");
+            const strictNodesSwitch = document.getElementById("torStrictNodesSwitch");
+
+            if (strictNodesSwitch) {
+                strictNodesSwitch.checked = cfg.strict_nodes !== false;
+            }
+
+            if (countrySelect) {
+                const country = (cfg.exit_country || "all").toLowerCase();
+                const standardOptions = ["all", "ru", "us", "de", "nl", "fr", "gb", "pl", "ca", "se", "ch"];
+                if (standardOptions.includes(country)) {
+                    countrySelect.value = country;
+                    if (customCountryContainer) customCountryContainer.style.display = "none";
+                } else {
+                    countrySelect.value = "custom";
+                    if (customCountryContainer) customCountryContainer.style.display = "block";
+                    if (customCountryInput) customCountryInput.value = country;
+                }
+            }
         }
     } catch (err) {
         console.error("Failed to load Tor config:", err);
@@ -873,6 +896,18 @@ async function loadTorStatus() {
             if (isTorVal) {
                 isTorVal.style.color = st.is_tor ? "var(--accent-green)" : "var(--accent-amber)";
                 isTorVal.textContent = st.is_tor ? "Да (Tor Exit Node)" : "Внешний IP";
+            }
+            const countryVal = document.getElementById("torCountryValue");
+            if (countryVal) {
+                if (st.country && st.country !== "Unknown") {
+                    const flag = getCountryFlagEmoji(st.country_code);
+                    countryVal.innerHTML = `<span style="font-size: 1.15rem;">${flag}</span> <strong style="color: var(--accent-cyan);">${st.country}</strong> ${st.city ? `<span style="color: var(--text-muted); font-size: 0.8rem;">(${st.city})</span>` : ''}`;
+                } else {
+                    countryVal.textContent = "🌐 Определение...";
+                }
+            }
+            if (chipText && st.country_code) {
+                chipText.textContent = `Tor: ${st.ip} [${getCountryFlagEmoji(st.country_code)} ${st.country_code}]`;
             }
             if (portVal) portVal.textContent = `127.0.0.1:${st.port}`;
             if (latencyVal) latencyVal.textContent = `${st.latency_ms} мс`;
@@ -1041,6 +1076,13 @@ async function saveTorSettings() {
     }
     const strict = document.getElementById("torStrictSwitch").checked;
 
+    const countrySelect = document.getElementById("torExitCountrySelect");
+    let exitCountry = countrySelect ? countrySelect.value : "all";
+    if (exitCountry === "custom") {
+        exitCountry = (document.getElementById("torCustomCountryInput")?.value || "all").trim();
+    }
+    const strictNodes = document.getElementById("torStrictNodesSwitch")?.checked ?? true;
+
     try {
         const res = await fetch("/api/tor/config", {
             method: "POST",
@@ -1048,7 +1090,9 @@ async function saveTorSettings() {
             body: JSON.stringify({
                 enabled: true,
                 port: port,
-                strict: strict
+                strict: strict,
+                exit_country: exitCountry,
+                strict_nodes: strictNodes
             })
         });
         const data = await res.json();
@@ -2862,5 +2906,61 @@ document.addEventListener("DOMContentLoaded", function() {
     const btn = document.getElementById("btnCheckAllFeed");
     if (btn) {
         btn.addEventListener("click", () => window.checkAllFeed());
+    }
+});
+
+
+// --- Tor Geo & Exit Country Handlers ---
+function getCountryFlagEmoji(code) {
+    if (!code || typeof code !== 'string' || code.length !== 2) return "🌐";
+    try {
+        const codePoints = code.toUpperCase().split('').map(c => 127397 + c.charCodeAt(0));
+        return String.fromCodePoint(...codePoints);
+    } catch (e) {
+        return "🌐";
+    }
+}
+
+async function restartTorService() {
+    const btn = document.getElementById("btnRestartTorService");
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳</span> Перезапуск Tor...';
+    }
+    showToast("Перезапуск службы Tor и перестроение цепи через выбранное ГЕО...", "info");
+    try {
+        // First ensure settings are saved
+        await saveTorSettings();
+        const res = await fetch("/api/tor/service/restart", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("🧅 Tor успешно перезапущен! Построение новой цепи...", "success");
+            setTimeout(loadTorStatus, 3000);
+            setTimeout(loadTorStatus, 8000);
+        } else {
+            showToast(data.error || "Ошибка перезапуска Tor", "error");
+        }
+    } catch (e) {
+        showToast("Сбой перезапуска: " + e.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '🔄 Сменить IP / ГЕО';
+        }
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+    const countrySelect = document.getElementById("torExitCountrySelect");
+    const customContainer = document.getElementById("torCustomCountryContainer");
+    if (countrySelect && customContainer) {
+        countrySelect.addEventListener("change", function() {
+            customContainer.style.display = this.value === "custom" ? "block" : "none";
+        });
+    }
+
+    const btnRestart = document.getElementById("btnRestartTorService");
+    if (btnRestart) {
+        btnRestart.addEventListener("click", restartTorService);
     }
 });
