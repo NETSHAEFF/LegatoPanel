@@ -699,6 +699,42 @@ async function loadRecentUploads() {
             const sizeMb = (u.file_size / (1024 * 1024)).toFixed(1);
             const isSuccess = u.status === "success";
 
+            // Feed visibility badge
+            let feedBadge = '<span style="color: var(--text-muted); font-size: 0.8rem;">—</span>';
+            if (u.remote_fid) {
+                if (u.feed_status === 'in_feed') {
+                    feedBadge = `
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span class="brand-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green);" title="Подтверждено: видео есть в общей ленте /feed (виден зрителям)">
+                                🟢 В ленте
+                            </span>
+                            <button class="btn btn-secondary btn-xs" onclick="checkUploadFeed(${u.id}, '${u.remote_fid}')" title="Перепроверить видимость" style="padding: 0.2rem 0.4rem; font-size: 0.75rem;">🔄</button>
+                        </div>
+                    `;
+                } else if (u.feed_status === 'shadowbanned') {
+                    feedBadge = `
+                        <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span class="brand-badge" style="background: rgba(239, 68, 68, 0.25); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4);" title="🚨 Видео отсутствует в общей ленте /feed (Теневой бан). Причины: Tor IP, ссылки на Telegram в описании или фильтр гео.">
+                                🚨 Shadowban
+                            </span>
+                            <button class="btn btn-secondary btn-xs" onclick="checkUploadFeed(${u.id}, '${u.remote_fid}')" title="Перепроверить видимость" style="padding: 0.2rem 0.4rem; font-size: 0.75rem;">🔄</button>
+                        </div>
+                    `;
+                } else if (u.feed_status === 'checking') {
+                    feedBadge = `
+                        <span class="brand-badge" style="background: rgba(245, 158, 11, 0.2); color: var(--accent-amber);" title="Идет проверка в ленте wvids.com/feed...">
+                            ⏳ Проверка...
+                        </span>
+                    `;
+                } else {
+                    feedBadge = `
+                        <button class="btn btn-secondary btn-xs" onclick="checkUploadFeed(${u.id}, '${u.remote_fid}')" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" title="Проверить отображение в общей ленте /feed">
+                            🔍 Проверить
+                        </button>
+                    `;
+                }
+            }
+
             return `
                 <tr>
                     <td>#${u.id}</td>
@@ -711,6 +747,7 @@ async function loadRecentUploads() {
                             ${u.status}
                         </span>
                     </td>
+                    <td>${feedBadge}</td>
                     <td style="color: var(--text-muted); font-size: 0.8rem;">${dateStr}</td>
                 </tr>
             `;
@@ -2763,3 +2800,67 @@ function runTimingSimulation() {
         }
     }, 200);
 }
+
+
+// --- Shadowban Feed Checker Functions ---
+window.checkUploadFeed = async function(uploadId, fid) {
+    if (typeof showToast === 'function') {
+        showToast(`Проверка поста #${fid} в общей ленте /feed...`, "info");
+    }
+    try {
+        const res = await fetch(`/api/uploads/${uploadId}/check-feed`, { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            if (data.in_feed) {
+                if (typeof showToast === 'function') showToast(`🟢 Пост #${fid} подтвержден в общей ленте /feed!`, "success");
+            } else {
+                if (typeof showToast === 'function') showToast(`🚨 Пост #${fid} НЕ найден в /feed (Теневой бан!)`, "error");
+            }
+            if (typeof loadRecentUploads === 'function') await loadRecentUploads();
+            if (typeof loadLogs === 'function') await loadLogs();
+        } else {
+            if (typeof showToast === 'function') showToast(data.detail || data.error || "Ошибка проверки", "error");
+        }
+    } catch (e) {
+        if (typeof showToast === 'function') showToast("Ошибка соединения: " + e.message, "error");
+    }
+};
+
+window.checkAllFeed = async function() {
+    const btn = document.getElementById("btnCheckAllFeed");
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳</span> Проверка...';
+    }
+    if (typeof showToast === 'function') {
+        showToast("Сканирование ленты /feed на наличие ваших постов...", "info");
+    }
+    try {
+        const res = await fetch("/api/uploads/check-all-feed", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            const msg = `Проверено: ${data.checked}. В ленте: ${data.in_feed_count}, Shadowban: ${data.shadowbanned_count}`;
+            if (typeof showToast === 'function') {
+                showToast(msg, data.shadowbanned_count > 0 ? "warning" : "success");
+            }
+            if (typeof loadRecentUploads === 'function') await loadRecentUploads();
+            if (typeof loadLogs === 'function') await loadLogs();
+        } else {
+            if (typeof showToast === 'function') showToast(data.detail || data.error || "Ошибка проверки", "error");
+        }
+    } catch (e) {
+        if (typeof showToast === 'function') showToast("Ошибка соединения: " + e.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<span>🔍</span> Проверить видимость в /feed';
+        }
+    }
+};
+
+document.addEventListener("DOMContentLoaded", function() {
+    const btn = document.getElementById("btnCheckAllFeed");
+    if (btn) {
+        btn.addEventListener("click", () => window.checkAllFeed());
+    }
+});

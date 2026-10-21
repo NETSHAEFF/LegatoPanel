@@ -77,6 +77,14 @@ def init_db():
     if "suspended_at" not in account_cols:
         cursor.execute("ALTER TABLE accounts ADD COLUMN suspended_at INTEGER DEFAULT 0")
 
+    # Check and migrate uploads table columns for shadowban feed detection
+    cursor.execute("PRAGMA table_info(uploads)")
+    upload_cols = [col[1] for col in cursor.fetchall()]
+    if "feed_status" not in upload_cols:
+        cursor.execute("ALTER TABLE uploads ADD COLUMN feed_status TEXT DEFAULT 'unknown'")
+    if "feed_checked_at" not in upload_cols:
+        cursor.execute("ALTER TABLE uploads ADD COLUMN feed_checked_at INTEGER DEFAULT 0")
+
     # Seed default Tor settings (enabled by default)
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tor_enabled', '1')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tor_port', '9150')")
@@ -291,6 +299,28 @@ def update_upload_record(record_id: int, status: str, remote_fid: str = "", erro
     UPDATE uploads SET status = ?, remote_fid = COALESCE(NULLIF(?, ''), remote_fid), error = ?
     WHERE id = ?
     """, (status, remote_fid, error, record_id))
+    conn.commit()
+    conn.close()
+
+def update_upload_feed_status(record_id: int, feed_status: str):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+    UPDATE uploads SET feed_status = ?, feed_checked_at = ?
+    WHERE id = ?
+    """, (feed_status, int(time.time()), record_id))
+    conn.commit()
+    conn.close()
+
+def update_upload_feed_status_by_fid(remote_fid: str, feed_status: str):
+    if not remote_fid:
+        return
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+    UPDATE uploads SET feed_status = ?, feed_checked_at = ?
+    WHERE remote_fid = ?
+    """, (feed_status, int(time.time()), str(remote_fid)))
     conn.commit()
     conn.close()
 

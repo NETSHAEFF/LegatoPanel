@@ -716,3 +716,57 @@ class WvidsClient:
         except Exception as e:
             return {"status": "error", "is_suspended": False, "error": str(e)}
 
+    async def check_post_in_feed(self, fid: str, slug: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Scans https://wvids.com/feed to check whether the post is visible to public users
+        or filtered into a shadowban (0 distribution).
+        """
+        session = self.get_session()
+        await human_jitter(0.2, 0.5)
+        try:
+            feed_url = f"{DEFAULT_HOST}/feed"
+            res = session.get(feed_url, timeout=15)
+            if res.status_code != 200:
+                return {
+                    "success": False,
+                    "in_feed": False,
+                    "fid": str(fid),
+                    "error": f"HTTP {res.status_code} при запросе ленты /feed"
+                }
+
+            html = res.text
+            clean_fid = str(fid).strip()
+            # 1. Direct regex check for post ID in feed
+            id_pattern = rf'id=[\'"](?:progress)?{re.escape(clean_fid)}[\'"]'
+            found_by_id = bool(re.search(id_pattern, html))
+
+            # 2. Check by slug if provided
+            found_by_slug = False
+            if slug:
+                clean_slug = str(slug).strip()
+                slug_pattern = rf'(?:data-post|href)=[\'"][^\'"]*{re.escape(clean_slug)}[\'"]'
+                found_by_slug = bool(re.search(slug_pattern, html))
+
+            # 3. Fallback: string presence of clean fid
+            found_by_str = clean_fid in html
+
+            in_feed = found_by_id or found_by_slug or found_by_str
+
+            # Count total posts visible in feed
+            visible_count = len(re.findall(r'class=["\']boxpost tube["\']', html))
+
+            return {
+                "success": True,
+                "in_feed": in_feed,
+                "fid": clean_fid,
+                "visible_count": visible_count,
+                "status_code": res.status_code
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "in_feed": False,
+                "fid": str(fid),
+                "error": str(e)
+            }
+

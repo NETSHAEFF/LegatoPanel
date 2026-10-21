@@ -10,8 +10,58 @@ from bs4 import BeautifulSoup
 from .config import MAX_FILE_SIZE_BYTES, URL_SHARE, DEFAULT_HOST
 from .client import WvidsClient
 from .fingerprint import human_jitter
-from .storage import add_log, update_upload_record
+from .storage import add_log, update_upload_record, update_upload_feed_status, update_upload_feed_status_by_fid
 from .video_processor import process_video_if_enabled
+
+async def async_verify_post_in_feed(client: WvidsClient, record_id: Optional[int], fid: str):
+    """
+    Background verification after upload:
+    Waits 20 seconds, then checks if post appeared in https://wvids.com/feed.
+    If missing, retries after 25 seconds.
+    Updates DB feed_status to 'in_feed' or 'shadowbanned'.
+    """
+    if not fid:
+        return
+    try:
+        if record_id:
+            update_upload_feed_status(record_id, "checking")
+
+        add_log("INFO", f"⏳ Запущена автопроверка видимости поста #{fid} в общей ленте /feed...")
+        await asyncio.sleep(20)
+
+        # First attempt
+        res = await client.check_post_in_feed(fid)
+        if res.get("in_feed"):
+            if record_id:
+                update_upload_feed_status(record_id, "in_feed")
+            else:
+                update_upload_feed_status_by_fid(fid, "in_feed")
+            add_log("SUCCESS", f"🟢 [FEED CONFIRMED] Пост #{fid} подтвержден в общей ленте /feed (виден зрителям!)")
+            return
+
+        # Second attempt after 25 seconds (in case of caching / queue lag)
+        await asyncio.sleep(25)
+        res2 = await client.check_post_in_feed(fid)
+        if res2.get("in_feed"):
+            if record_id:
+                update_upload_feed_status(record_id, "in_feed")
+            else:
+                update_upload_feed_status_by_fid(fid, "in_feed")
+            add_log("SUCCESS", f"🟢 [FEED CONFIRMED] Пост #{fid} подтвержден в общей ленте /feed (со 2-й попытки)")
+            return
+
+        # If still not in feed -> Shadowban!
+        if record_id:
+            update_upload_feed_status(record_id, "shadowbanned")
+        else:
+            update_upload_feed_status_by_fid(fid, "shadowbanned")
+        add_log(
+            "WARNING",
+            f"🚨 [SHADOWBAN DETECTED] Пост #{fid} опубликован на канале, но отсутствует в общей ленте /feed! "
+            "Возможен теневой бан из-за Tor IP, спам-ссылок или фильтра гео."
+        )
+    except Exception as e:
+        add_log("WARNING", f"Ошибка проверки видимости поста #{fid} в ленте: {e}")
 
 # Common media MIME types fallback
 MIME_MAP = {
@@ -375,6 +425,8 @@ class ContentUploader:
                 add_log("SUCCESS", success_msg, f"fid={target_post_fid}")
                 if record_id:
                     update_upload_record(record_id, "success", remote_fid=str(target_post_fid))
+                # Trigger background Shadowban detection in /feed
+                asyncio.create_task(async_verify_post_in_feed(self.client, record_id, str(target_post_fid)))
                 return {
                     "success": True,
                     "file_id": target_post_fid,
@@ -388,6 +440,7 @@ class ContentUploader:
                 err = share_json.get("error") or "Не удалось завершить публикацию (share)"
                 add_log("WARNING", f"Предупреждение публикации: {err}")
                 if record_id: update_upload_record(record_id, "published_with_warning", remote_fid=str(target_post_fid))
+                asyncio.create_task(async_verify_post_in_feed(self.client, record_id, str(target_post_fid)))
                 return {
                     "success": True,
                     "file_id": target_post_fid,

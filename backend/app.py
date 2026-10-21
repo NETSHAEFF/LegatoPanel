@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import asyncio
 import time
@@ -44,6 +45,8 @@ from .storage import (
     delete_account,
     add_upload_record,
     get_recent_uploads,
+    update_upload_feed_status,
+    update_upload_feed_status_by_fid,
     get_recent_logs,
     clear_logs,
     add_log,
@@ -408,6 +411,98 @@ async def upload_local_path(req: LocalPathUploadRequest):
 async def list_recent_uploads():
     uploads = get_recent_uploads(50)
     return {"success": True, "uploads": uploads}
+
+@app.post("/api/uploads/{upload_id}/check-feed")
+async def check_single_upload_feed(upload_id: int):
+    """
+    Checks if a specific uploaded video appears in wvids.com/feed (detects shadowban).
+    """
+    uploads = get_recent_uploads(100)
+    target = next((u for u in uploads if u.get("id") == upload_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Запись о загрузке не найдена")
+
+    remote_fid = target.get("remote_fid")
+    if not remote_fid:
+        raise HTTPException(status_code=400, detail="У данной записи нет опубликованного FID")
+
+    client = get_client_for_account()
+    res = await client.check_post_in_feed(fid=remote_fid)
+    if not res.get("success"):
+        raise HTTPException(status_code=502, detail=res.get("error", "Ошибка проверки ленты"))
+
+    in_feed = res.get("in_feed", False)
+    status_str = "in_feed" if in_feed else "shadowbanned"
+    update_upload_feed_status(upload_id, status_str)
+
+    msg = f"Пост #{remote_fid}: {'🟢 Виден в общей ленте /feed' if in_feed else '🚨 Теневой бан (отсутствует в /feed)'}"
+    add_log("SUCCESS" if in_feed else "WARNING", msg)
+
+    return {
+        "success": True,
+        "upload_id": upload_id,
+        "fid": remote_fid,
+        "in_feed": in_feed,
+        "feed_status": status_str,
+        "visible_feed_posts": res.get("visible_count", 0),
+        "message": msg
+    }
+
+@app.post("/api/uploads/check-all-feed")
+async def check_all_recent_uploads_feed():
+    """
+    Batch scans wvids.com/feed once and updates visibility status for all recent successful uploads.
+    """
+    uploads = get_recent_uploads(50)
+    successful = [u for u in uploads if u.get("status") in ["success", "published_with_warning"] and u.get("remote_fid")]
+    if not successful:
+        return {"success": True, "checked": 0, "results": []}
+
+    client = get_client_for_account()
+    session = client.get_session()
+
+    try:
+        r = session.get(f"{client.DEFAULT_HOST if hasattr(client, 'DEFAULT_HOST') else 'https://wvids.com'}/feed", timeout=15)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Ошибка запроса /feed: HTTP {r.status_code}")
+        feed_html = r.text
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Не удалось получить /feed: {e}")
+
+    results = []
+    in_feed_count = 0
+    shadowbanned_count = 0
+
+    for u in successful:
+        fid = str(u.get("remote_fid")).strip()
+        uid = u.get("id")
+        pattern = rf'id=[\'"](?:progress)?{re.escape(fid)}[\'"]'
+        found = bool(re.search(pattern, feed_html)) or (fid in feed_html)
+
+        status_str = "in_feed" if found else "shadowbanned"
+        update_upload_feed_status(uid, status_str)
+        if found:
+            in_feed_count += 1
+        else:
+            shadowbanned_count += 1
+
+        results.append({
+            "id": uid,
+            "fid": fid,
+            "in_feed": found,
+            "feed_status": status_str
+        })
+
+    summary_msg = f"Проверка ленты /feed: проверено {len(successful)} постов (В ленте: {in_feed_count}, Shadowban: {shadowbanned_count})"
+    add_log("INFO" if shadowbanned_count == 0 else "WARNING", summary_msg)
+
+    return {
+        "success": True,
+        "checked": len(successful),
+        "in_feed_count": in_feed_count,
+        "shadowbanned_count": shadowbanned_count,
+        "results": results
+    }
 
 # Batch Upload Queue API
 class StartBatchRequest(BaseModel):
