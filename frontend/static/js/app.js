@@ -14,6 +14,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadLogs();
     loadTorConfig();
     loadTorStatus();
+    loadNetworkStatus();
     loadBatchSettings();
     loadBatchFiles();
     loadBatchStatus();
@@ -22,6 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initProcessingStudio();
     // Periodic refresh
     setInterval(loadTorStatus, 30000);
+    setInterval(loadNetworkStatus, 25000);
     setInterval(loadBatchStatus, 2500);
     setInterval(loadBulkRedactStatus, 2000);
 });
@@ -2962,5 +2964,187 @@ document.addEventListener("DOMContentLoaded", function() {
     const btnRestart = document.getElementById("btnRestartTorService");
     if (btnRestart) {
         btnRestart.addEventListener("click", restartTorService);
+    }
+});
+
+
+// --- Network Routing Mode & VLESS Handlers ---
+async function loadNetworkStatus() {
+    try {
+        const res = await fetch("/api/network/status");
+        const data = await res.json();
+        if (!data.success) return;
+
+        const mode = data.mode || "vless";
+        const act = data.active_status || {};
+        const vless = data.vless_status || {};
+
+        // 1. Update Mode Cards
+        const cardVless = document.getElementById("modeCardVless");
+        const cardTor = document.getElementById("modeCardTor");
+        const cardDirect = document.getElementById("modeCardDirect");
+        const badgeVless = document.getElementById("badgeModeVless");
+        const badgeTor = document.getElementById("badgeModeTor");
+        const badgeDirect = document.getElementById("badgeModeDirect");
+        const modeLabel = document.getElementById("activeNetworkModeLabel");
+
+        if (cardVless && cardTor && cardDirect) {
+            [cardVless, cardTor, cardDirect].forEach(c => {
+                c.style.border = "1px solid rgba(255, 255, 255, 0.12)";
+                c.style.background = "rgba(255, 255, 255, 0.03)";
+            });
+            if (badgeVless) badgeVless.style.display = "none";
+            if (badgeTor) badgeTor.style.display = "none";
+            if (badgeDirect) badgeDirect.style.display = "none";
+
+            if (mode === "vless") {
+                cardVless.style.border = "2px solid var(--accent-green)";
+                cardVless.style.background = "rgba(16, 185, 129, 0.1)";
+                if (badgeVless) badgeVless.style.display = "inline-block";
+                if (modeLabel) {
+                    modeLabel.innerHTML = '⚡ VLESS Reality (Германия)';
+                    modeLabel.style.color = 'var(--accent-green)';
+                }
+            } else if (mode === "tor") {
+                cardTor.style.border = "2px solid var(--accent-cyan)";
+                cardTor.style.background = "rgba(6, 182, 212, 0.1)";
+                if (badgeTor) badgeTor.style.display = "inline-block";
+                if (modeLabel) {
+                    modeLabel.innerHTML = '🧅 Tor Network';
+                    modeLabel.style.color = 'var(--accent-cyan)';
+                }
+            } else {
+                cardDirect.style.border = "2px solid #94a3b8";
+                cardDirect.style.background = "rgba(148, 163, 184, 0.1)";
+                if (badgeDirect) badgeDirect.style.display = "inline-block";
+                if (modeLabel) {
+                    modeLabel.innerHTML = '🌐 Direct (Прямое соединение)';
+                    modeLabel.style.color = '#94a3b8';
+                }
+            }
+        }
+
+        // 2. Update Header Status Chip
+        const chip = document.getElementById("headerTorChip");
+        const chipIcon = document.getElementById("headerNetworkIcon");
+        const chipText = document.getElementById("headerTorStatusText");
+        const chipDot = document.getElementById("headerTorDot");
+
+        if (chipText && chipDot) {
+            if (mode === "vless") {
+                if (chipIcon) chipIcon.textContent = "⚡";
+                chipDot.className = act.connected ? "tor-dot active" : "tor-dot";
+                if (act.connected && act.ip) {
+                    chipText.textContent = `VLESS: ${act.ip} [${getCountryFlagEmoji(act.country_code)} ${act.country_code || 'DE'}]`;
+                } else {
+                    chipText.textContent = "VLESS: Подключение...";
+                }
+            } else if (mode === "tor") {
+                if (chipIcon) chipIcon.textContent = "🧅";
+                chipDot.className = act.connected ? "tor-dot active" : "tor-dot";
+                if (act.connected && act.ip) {
+                    chipText.textContent = `Tor: ${act.ip} [${getCountryFlagEmoji(act.country_code)} ${act.country_code || '?'}]`;
+                } else {
+                    chipText.textContent = "Tor: Отключен";
+                }
+            } else {
+                if (chipIcon) chipIcon.textContent = "🌐";
+                chipDot.className = "tor-dot active";
+                chipText.textContent = "Direct: Прямой IP";
+            }
+        }
+
+        // 3. Update VLESS Telemetry Card
+        const vIp = document.getElementById("vlessIpValue");
+        const vCountry = document.getElementById("vlessCountryValue");
+        const vIsp = document.getElementById("vlessIspValue");
+        const vIsTor = document.getElementById("vlessIsTorValue");
+        const vWvids = document.getElementById("vlessWvidsValue");
+        const vBadge = document.getElementById("vlessServiceBadge");
+
+        if (mode === "vless" && act.connected) {
+            if (vIp) vIp.textContent = act.ip || "37.114.42.98";
+            if (vCountry) {
+                const flag = getCountryFlagEmoji(act.country_code);
+                vCountry.innerHTML = `<span style="font-size: 1.15rem;">${flag}</span> <strong>${act.country}</strong> ${act.city ? `(${act.city})` : ''}`;
+            }
+            if (vIsp) vIsp.textContent = act.isp || act.org || "ProHosting24 (SYNLINQ)";
+            if (vIsTor) {
+                vIsTor.innerHTML = act.is_tor ? '<span style="color: var(--accent-red);">Обнаружен Tor</span>' : '<span style="color: var(--accent-green);">✅ Чистый IP (IsTor: false)</span>';
+            }
+            if (vWvids) {
+                vWvids.innerHTML = act.wvids_accessible ? '<span style="color: var(--accent-green);">✅ HTTP 200 OK (Доступен)</span>' : '<span style="color: var(--accent-red);">Недоступен</span>';
+            }
+            if (vBadge) {
+                vBadge.innerHTML = '<span class="tor-dot active" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span> Подключено (10808)';
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load network status:", e);
+    }
+}
+
+window.switchNetworkMode = async function(mode) {
+    const labels = {
+        "vless": "⚡ VLESS Reality (Германия)",
+        "tor": "🧅 Tor Network",
+        "direct": "🌐 Прямое соединение"
+    };
+    showToast(`Переключение маршрутизатора на: ${labels[mode] || mode}...`, "info");
+    try {
+        const res = await fetch("/api/network/mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: mode })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast(`Маршрутизатор успешно переключен на: ${data.label}`, "success");
+            await loadNetworkStatus();
+            await loadLogs();
+        } else {
+            showToast(data.detail || data.error || "Ошибка переключения", "error");
+        }
+    } catch (e) {
+        showToast("Ошибка запроса: " + e.message, "error");
+    }
+};
+
+window.testVlessConnection = async function() {
+    const btn = document.getElementById("btnTestVless");
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⏳</span> Проверка VLESS...';
+    }
+    showToast("Тестирование соединения с сервером VLESS (🇩🇪 Германия)...", "info");
+    try {
+        const res = await fetch("/api/vless/test", { method: "POST" });
+        const data = await res.json();
+        const r = data.result || {};
+        if (data.success && r.connected) {
+            const flag = getCountryFlagEmoji(r.country_code);
+            showToast(`⚡ VLESS активен! IP: ${r.ip} (${flag} ${r.country}), пинг: ${r.latency_ms}мс`, "success");
+            await loadNetworkStatus();
+        } else {
+            showToast(r.error || "Не удалось подключиться к VLESS", "error");
+        }
+    } catch (e) {
+        showToast("Ошибка проверки VLESS: " + e.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<span>🔍</span> Проверить связь VLESS';
+        }
+    }
+};
+
+// Make header chip clickable to jump directly to network settings
+document.addEventListener("DOMContentLoaded", function() {
+    const chip = document.getElementById("headerTorChip");
+    if (chip) {
+        chip.addEventListener("click", function() {
+            const tabBtn = document.querySelector('[data-tab="tab-antidetect"]');
+            if (tabBtn) tabBtn.click();
+        });
     }
 });

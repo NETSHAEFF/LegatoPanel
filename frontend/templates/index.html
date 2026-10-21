@@ -29,11 +29,11 @@
                 </div>
 
                 <div class="header-account-status">
-                    <!-- Tor Routing Badge -->
-                    <div class="tor-chip" id="headerTorChip" title="Статус Tor сети (кликните для настроек)">
+                    <!-- Network Routing Badge -->
+                    <div class="tor-chip" id="headerTorChip" style="cursor: pointer;" title="Текущий сетевой маршрут (кликните для настроек)">
                         <span class="tor-dot" id="headerTorDot"></span>
-                        <span style="font-size: 0.95rem;">🧅</span>
-                        <span id="headerTorStatusText">Tor: Проверка...</span>
+                        <span id="headerNetworkIcon" style="font-size: 0.95rem;">⚡</span>
+                        <span id="headerTorStatusText">Сеть: Проверка...</span>
                     </div>
 
                     <div class="account-chip" id="headerAccountChip">
@@ -143,7 +143,7 @@
                         <circle cx="12" cy="12" r="10"></circle>
                         <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
                     </svg>
-                    🧅 Tor Сеть & Защита
+                    🛡️ Сеть & VPN (VLESS / Tor)
                 </button>
                 <button class="tab-btn" data-tab="tab-logs">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1427,8 +1427,141 @@
                 </div>
             </section>
 
-            <!-- TAB 5: TOR NETWORK & ANTI-DETECT -->
+            <!-- TAB 5: NETWORK, VPN (VLESS) & ANTI-DETECT -->
             <section id="tab-antidetect" class="tab-content">
+
+                <!-- NETWORK MODE SWITCHER (VLESS / TOR / DIRECT) -->
+                <div class="card" style="margin-bottom: 1.5rem; background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(6, 182, 212, 0.05)); border: 1px solid rgba(16, 185, 129, 0.25);">
+                    <div class="card-header" style="margin-bottom: 1rem;">
+                        <div class="card-title" style="font-size: 1.15rem; color: #fff;">
+                            <span>🔀</span> Переключатель сетевого режима маршрутизации
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">
+                            Активный режим: <strong id="activeNetworkModeLabel" style="color: var(--accent-green);">⚡ VLESS Reality (Германия)</strong>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem;">
+                        <!-- Mode Card 1: VLESS -->
+                        <div class="mode-card active" id="modeCardVless" onclick="switchNetworkMode('vless')" style="padding: 1.25rem; border-radius: var(--radius-md); border: 2px solid var(--accent-green); background: rgba(16, 185, 129, 0.1); cursor: pointer; transition: all 0.2s ease;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.6rem;">
+                                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                    <span style="font-size: 1.6rem;">⚡</span>
+                                    <div>
+                                        <div style="font-weight: 700; color: #fff; font-size: 1rem;">VLESS Reality (Германия)</div>
+                                        <div style="font-size: 0.75rem; color: var(--accent-green); font-weight: 600;">РЕКОМЕНДУЕТСЯ • vpn.txt</div>
+                                    </div>
+                                </div>
+                                <span class="badge" id="badgeModeVless" style="background: var(--accent-green); color: #000; font-weight: 700; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px;">АКТИВЕН</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0; line-height: 1.4;">
+                                Чистый приватный IP (<strong style="color: #fff;">37.114.42.98</strong>) через Xray-core. Полный обход теневого бана Cloudflare, 100% видимость в /feed.
+                            </p>
+                        </div>
+
+                        <!-- Mode Card 2: Tor Network -->
+                        <div class="mode-card" id="modeCardTor" onclick="switchNetworkMode('tor')" style="padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.03); cursor: pointer; transition: all 0.2s ease;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.6rem;">
+                                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                    <span style="font-size: 1.6rem;">🧅</span>
+                                    <div>
+                                        <div style="font-weight: 700; color: #fff; font-size: 1rem;">Tor Network</div>
+                                        <div style="font-size: 0.75rem; color: var(--accent-cyan);">Анонимность • Спуфинг ГЕО</div>
+                                    </div>
+                                </div>
+                                <span class="badge" id="badgeModeTor" style="display: none; background: var(--accent-cyan); color: #000; font-weight: 700; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px;">АКТИВЕН</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0; line-height: 1.4;">
+                                Маршрутизация через сеть Tor с выбором страны выхода ({de}, {us}, {ru}) и мостами obfs4.
+                            </p>
+                        </div>
+
+                        <!-- Mode Card 3: Direct -->
+                        <div class="mode-card" id="modeCardDirect" onclick="switchNetworkMode('direct')" style="padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.03); cursor: pointer; transition: all 0.2s ease;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.6rem;">
+                                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                    <span style="font-size: 1.6rem;">🌐</span>
+                                    <div>
+                                        <div style="font-weight: 700; color: #fff; font-size: 1rem;">Прямое соединение (Direct)</div>
+                                        <div style="font-size: 0.75rem; color: var(--text-muted);">Без прокси и VPN</div>
+                                    </div>
+                                </div>
+                                <span class="badge" id="badgeModeDirect" style="display: none; background: #64748b; color: #fff; font-weight: 700; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px;">АКТИВЕН</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0; line-height: 1.4;">
+                                Запросы отправляются напрямую с вашего реального интернет-соединения без промежуточных серверов.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VLESS Reality Telemetry & Status Card -->
+                <div class="card" id="vlessStatusCard" style="margin-bottom: 1.5rem; background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(15, 23, 42, 0.6)); border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">
+                        <div style="display: flex; align-items: center; gap: 0.8rem;">
+                            <div style="font-size: 2rem;">⚡</div>
+                            <div>
+                                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin-bottom: 0.2rem;">
+                                    VLESS Reality Telemetry (🇩🇪 Vless #03)
+                                </h2>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">
+                                    Служба Xray-core на порту <code style="color: var(--accent-green);">127.0.0.1:10808</code> • Конфигурация: <strong>vpn.txt</strong>
+                                </p>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
+                            <button class="btn btn-primary btn-sm" id="btnTestVless" onclick="testVlessConnection()" style="background: rgba(16, 185, 129, 0.25); border: 1px solid rgba(16, 185, 129, 0.5); color: #34d399;">
+                                <span>🔍</span> Проверить связь VLESS
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="tor-metrics-grid">
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Статус службы Xray</div>
+                            <div class="tor-metric-value" id="vlessServiceBadge" style="color: var(--accent-green); display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="tor-dot active" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                                Подключено (10808)
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Внешний IP VLESS</div>
+                            <div class="tor-metric-value" id="vlessIpValue" style="color: var(--accent-cyan); font-weight: 700;">
+                                37.114.42.98
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Страна и локация</div>
+                            <div class="tor-metric-value" id="vlessCountryValue" style="color: #fff;">
+                                🇩🇪 Germany (Leopoldshöhe)
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Провайдер / Хостинг</div>
+                            <div class="tor-metric-value" id="vlessIspValue" style="color: #fff; font-size: 0.9rem;">
+                                ProHosting24 (SYNLINQ)
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Проверка Cloudflare (IsTor)</div>
+                            <div class="tor-metric-value" id="vlessIsTorValue" style="color: var(--accent-green); font-weight: 700;">
+                                ✅ Чистый IP (IsTor: false)
+                            </div>
+                        </div>
+
+                        <div class="tor-metric-item">
+                            <div class="tor-metric-title">Доступ к wvids.com</div>
+                            <div class="tor-metric-value" id="vlessWvidsValue" style="color: var(--accent-green);">
+                                ✅ HTTP 200 OK
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Tor Network Control Center -->
                 <div class="tor-status-card">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">

@@ -34,7 +34,13 @@ from .tor import (
     is_port_open,
     tor_manager
 )
-from .storage import add_log, get_tor_config
+from .storage import (
+    add_log,
+    get_tor_config,
+    get_network_mode,
+    get_vless_config
+)
+from .vless import vless_manager
 
 def check_response_for_suspension(text: str, status_code: int = 200) -> Tuple[bool, str]:
     """
@@ -88,15 +94,31 @@ class WvidsClient:
         self.tor_strict = tor_cfg.get("strict", True)
 
     def _get_proxies_dict(self) -> Optional[Dict[str, str]]:
-        if self.use_tor:
-            # Enforce Tor via socks5h for 0 DNS leak
+        network_mode = get_network_mode()
+
+        # 1. VLESS VPN Mode (Recommended - German Exit Node via Xray)
+        if network_mode == "vless":
+            vless_cfg = get_vless_config()
+            v_port = vless_cfg.get("port", 10808)
+            v_host = vless_cfg.get("host", "127.0.0.1")
+            if not is_port_open(v_host, v_port):
+                # Auto-start standalone xray with vpn.txt if port not listening
+                vless_manager.ensure_running(port=v_port)
+
+            vless_url = f"socks5h://{v_host}:{v_port}"
+            return {
+                "http": vless_url,
+                "https": vless_url
+            }
+
+        # 2. Tor Network Mode
+        if network_mode == "tor" or (network_mode not in ("direct", "proxy") and self.use_tor):
             active_port = self.tor_port
             if not is_port_open("127.0.0.1", active_port):
                 detected = auto_detect_tor_port()
                 if detected:
                     active_port = detected
                 else:
-                    # Auto-start headless Tor in background!
                     add_log("INFO", "🧅 Попытка автоматического запуска автономного фонового Tor...")
                     if tor_manager.ensure_running(port=active_port or 9050):
                         active_port = tor_manager.get_status().get("port", 9050)
@@ -114,22 +136,31 @@ class WvidsClient:
                 "https": tor_url
             }
 
-        if not self.proxy:
-            return None
-        # curl_cffi supports http, https, socks5, socks5h
-        p = self.proxy
-        if not (p.startswith("http://") or p.startswith("https://") or p.startswith("socks5://") or p.startswith("socks5h://")):
-            p = f"http://{p}"
-        return {
-            "http": p,
-            "https": p
-        }
+        # 3. Custom Proxy per Account
+        if network_mode == "proxy" or (network_mode != "direct" and self.proxy):
+            if not self.proxy:
+                return None
+            p = self.proxy
+            if not (p.startswith("http://") or p.startswith("https://") or p.startswith("socks5://") or p.startswith("socks5h://")):
+                p = f"http://{p}"
+            return {
+                "http": p,
+                "https": p
+            }
+
+        # 4. Direct mode (no proxy)
+        return None
 
     def get_session(self) -> requests.Session:
         if self._session is None:
             proxies = self._get_proxies_dict()
-            if self.use_tor and proxies:
-                add_log("INFO", f"🧅 Инициализирована сессия через Tor: {proxies['http']} (DNS удаленный)")
+            network_mode = get_network_mode()
+            if proxies:
+                label = "VLESS Reality (Германия)" if network_mode == "vless" else ("Tor" if network_mode == "tor" else "Proxy")
+                add_log("INFO", f"🌐 Сессия инициализирована через {label}: {proxies['http']} (Zero DNS leak)")
+            else:
+                add_log("INFO", "🌐 Сессия инициализирована напрямую (Direct / без прокси)")
+
             self._session = requests.Session(
                 impersonate=self.fingerprint,
                 proxies=proxies

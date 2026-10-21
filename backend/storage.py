@@ -371,6 +371,35 @@ def set_setting(key: str, value: str):
     conn.commit()
     conn.close()
 
+def get_network_mode() -> str:
+    """
+    Returns active network proxy mode: 'vless', 'tor', 'direct', or 'proxy'.
+    Defaults to 'vless' since it resolves shadowban issues.
+    """
+    return get_setting("network_mode", "vless").strip().lower()
+
+def set_network_mode(mode: str):
+    valid_modes = {"vless", "tor", "direct", "proxy"}
+    target = mode.strip().lower() if mode and mode.strip().lower() in valid_modes else "vless"
+    set_setting("network_mode", target)
+
+def get_vless_config() -> Dict[str, Any]:
+    port_str = get_setting("vless_port", "10808")
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 10808
+    host = get_setting("vless_host", "127.0.0.1")
+    return {
+        "port": port,
+        "host": host,
+        "proxy_url": f"socks5h://{host}:{port}"
+    }
+
+def save_vless_config(port: int = 10808, host: str = "127.0.0.1"):
+    set_setting("vless_port", str(port))
+    set_setting("vless_host", host)
+
 def get_tor_config() -> Dict[str, Any]:
     enabled = get_setting("tor_enabled", "1") == "1"
     port_str = get_setting("tor_port", "9150")

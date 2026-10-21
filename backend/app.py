@@ -32,6 +32,10 @@ from .tor import (
     get_tor_proxy_url,
     tor_manager
 )
+from .vless import (
+    vless_manager,
+    check_vless_connection
+)
 from .storage import (
     get_all_accounts,
     get_account_by_id,
@@ -52,6 +56,10 @@ from .storage import (
     add_log,
     get_tor_config,
     save_tor_config,
+    get_network_mode,
+    set_network_mode,
+    get_vless_config,
+    save_vless_config,
     get_setting,
     set_setting,
     get_processing_settings,
@@ -647,6 +655,93 @@ async def single_redact_post(req: SingleRedactRequest):
         err = "; ".join(res.get("errors", ["Ошибка обновления поста"]))
         raise HTTPException(status_code=400, detail=err)
     return {"success": True, "result": res}
+
+# Network Proxy Mode & VLESS Management
+class NetworkModeRequest(BaseModel):
+    mode: str  # 'vless', 'tor', 'direct', 'proxy'
+
+@app.get("/api/network/status")
+async def get_network_status():
+    mode = get_network_mode()
+    vless_cfg = get_vless_config()
+    tor_cfg = get_tor_config()
+
+    # Fast connection status of current active mode
+    active_status = {}
+    if mode == "vless":
+        active_status = check_vless_connection(port=vless_cfg.get("port", 10808), timeout=6)
+    elif mode == "tor":
+        port = tor_cfg.get("port") or auto_detect_tor_port() or 9050
+        active_status = check_tor_connection(port=port, timeout=6)
+    else:
+        active_status = {
+            "connected": True,
+            "ip": "Direct IP",
+            "country": "Local",
+            "country_code": "",
+            "is_tor": False,
+            "latency_ms": 0
+        }
+
+    return {
+        "success": True,
+        "mode": mode,
+        "active_status": active_status,
+        "vless_status": vless_manager.get_status(),
+        "tor_status": tor_manager.get_status(),
+        "vless_config": vless_cfg,
+        "tor_config": tor_cfg
+    }
+
+@app.post("/api/network/mode")
+async def switch_network_mode(req: NetworkModeRequest):
+    new_mode = req.mode.strip().lower()
+    if new_mode not in ("vless", "tor", "direct", "proxy"):
+        raise HTTPException(status_code=400, detail="Недопустимый сетевой режим. Выберите: vless, tor, direct")
+
+    set_network_mode(new_mode)
+    labels = {
+        "vless": "⚡ VLESS Reality (Германия)",
+        "tor": "🧅 Tor Network",
+        "direct": "🌐 Прямое соединение (Direct)",
+        "proxy": "🔌 Пользовательский Proxy"
+    }
+    label = labels.get(new_mode, new_mode)
+    add_log("SUCCESS", f"Сетевой режим переключен на: {label}")
+
+    # Ensure background worker starts if vless or tor
+    if new_mode == "vless":
+        vless_manager.ensure_running(port=10808)
+    elif new_mode == "tor":
+        tor_cfg = get_tor_config()
+        port = tor_cfg.get("port") or 9050
+        tor_manager.ensure_running(port=port)
+
+    return {
+        "success": True,
+        "mode": new_mode,
+        "label": label,
+        "message": f"Сетевой маршрутизатор переключен на: {label}"
+    }
+
+@app.post("/api/vless/test")
+async def test_vless_endpoint():
+    cfg = get_vless_config()
+    res = check_vless_connection(port=cfg.get("port", 10808), timeout=10)
+    return {
+        "success": True,
+        "result": res
+    }
+
+@app.post("/api/vless/start")
+async def start_vless_endpoint():
+    res = vless_manager.start(port=10808)
+    return res
+
+@app.post("/api/vless/stop")
+async def stop_vless_endpoint():
+    res = vless_manager.stop()
+    return res
 
 # Tor Network Management
 class TorConfigRequest(BaseModel):
