@@ -67,6 +67,21 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS popular_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER,
+        account_username TEXT,
+        video_fid TEXT,
+        video_title TEXT,
+        video_url TEXT,
+        comment_text TEXT,
+        status TEXT,
+        response_msg TEXT,
+        created_at INTEGER
+    )
+    """)
+
     # Check and migrate accounts table columns for suspension support
     cursor.execute("PRAGMA table_info(accounts)")
     account_cols = [col[1] for col in cursor.fetchall()]
@@ -498,6 +513,51 @@ def save_processing_settings(new_cfg: Dict[str, Any]) -> Dict[str, Any]:
     curr.update(new_cfg)
     set_setting("video_processing_settings", json.dumps(curr, ensure_ascii=False))
     return curr
+
+def add_popular_comment_record(
+    account_id: Optional[int],
+    account_username: str,
+    video_fid: str,
+    video_title: str,
+    video_url: str,
+    comment_text: str,
+    status: str,
+    response_msg: str = ""
+) -> int:
+    conn = get_connection()
+    c = conn.cursor()
+    now = int(time.time())
+    c.execute("""
+    INSERT INTO popular_comments (
+        account_id, account_username, video_fid, video_title, video_url,
+        comment_text, status, response_msg, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        account_id, account_username, str(video_fid), video_title, video_url,
+        comment_text, status, response_msg, now
+    ))
+    rec_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rec_id
+
+def get_popular_comments_history(limit: int = 100) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+    SELECT * FROM popular_comments ORDER BY id DESC LIMIT ?
+    """, (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def clear_popular_comments_history() -> bool:
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM popular_comments")
+    conn.commit()
+    conn.close()
+    return True
 
 # Initialize tables
 init_db()

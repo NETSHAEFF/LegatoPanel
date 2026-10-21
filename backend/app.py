@@ -65,8 +65,11 @@ from .storage import (
     get_setting,
     set_setting,
     get_processing_settings,
-    save_processing_settings
+    save_processing_settings,
+    get_popular_comments_history,
+    clear_popular_comments_history
 )
+from .popular_commenter import popular_commenter
 from .video_processor import (
     POPULAR_FONTS,
     DEVICE_PROFILES,
@@ -657,6 +660,100 @@ async def single_redact_post(req: SingleRedactRequest):
         err = "; ".join(res.get("errors", ["Ошибка обновления поста"]))
         raise HTTPException(status_code=400, detail=err)
     return {"success": True, "result": res}
+
+# --- Popular Videos & Commenting Endpoints ---
+
+class SinglePopularCommentRequest(BaseModel):
+    fid: str
+    text: str
+    video_title: Optional[str] = ""
+    video_url: Optional[str] = ""
+    account_id: Optional[int] = None
+
+class BatchPopularCommentRequest(BaseModel):
+    fids: List[str]
+    templates: List[str]
+    delay_min: Optional[float] = 5.0
+    delay_max: Optional[float] = 12.0
+    account_ids: Optional[List[int]] = None
+
+@app.get("/api/popular/videos")
+async def get_popular_videos_endpoint(fresh: bool = False, limit: int = 50):
+    active = get_active_account()
+    client = get_client_for_account(active)
+    videos = await popular_commenter.fetch_popular_videos(client, max_items=limit, force=fresh)
+    return {
+        "success": True,
+        "count": len(videos),
+        "videos": videos,
+        "last_fetched_at": popular_commenter.last_fetched_at
+    }
+
+@app.get("/api/popular/comments/{fid}")
+async def get_video_comments_endpoint(fid: str, page: int = 0):
+    active = get_active_account()
+    client = get_client_for_account(active)
+    res = await client.get_video_comments(fid=fid, page=page)
+    return res
+
+@app.post("/api/popular/comment")
+async def post_popular_comment_endpoint(req: SinglePopularCommentRequest):
+    if req.account_id:
+        acc = get_account_by_id(req.account_id)
+    else:
+        acc = get_active_account()
+
+    if not acc:
+        raise HTTPException(status_code=400, detail="Нет доступного активного аккаунта для комментирования")
+
+    if acc.get("is_suspended"):
+        raise HTTPException(status_code=400, detail=f"Аккаунт @{acc.get('username')} заблокирован")
+
+    client = get_client_for_account(acc)
+    res = await popular_commenter.post_single_comment(
+        client=client,
+        fid=req.fid,
+        text=req.text,
+        video_title=req.video_title or "",
+        video_url=req.video_url or "",
+        account_id=acc.get("id"),
+        account_username=acc.get("username", "Unknown")
+    )
+    return res
+
+@app.post("/api/popular/batch-comment/start")
+async def start_batch_comment_endpoint(req: BatchPopularCommentRequest):
+    res = await popular_commenter.start_batch(
+        target_fids=req.fids,
+        comment_templates=req.templates,
+        delay_min=req.delay_min or 5.0,
+        delay_max=req.delay_max or 12.0,
+        account_ids=req.account_ids
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Не удалось запустить авто-комментирование"))
+    return res
+
+@app.post("/api/popular/batch-comment/stop")
+async def stop_batch_comment_endpoint():
+    res = await popular_commenter.stop()
+    return res
+
+@app.get("/api/popular/batch-comment/status")
+async def get_batch_comment_status_endpoint():
+    return popular_commenter.get_status()
+
+@app.get("/api/popular/history")
+async def get_popular_history_endpoint(limit: int = 100):
+    return {
+        "success": True,
+        "history": get_popular_comments_history(limit=limit)
+    }
+
+@app.delete("/api/popular/history")
+async def clear_popular_history_endpoint():
+    clear_popular_comments_history()
+    return {"success": True, "message": "История комментирования очищена"}
 
 # Network Proxy Mode & VLESS Management
 class NetworkModeRequest(BaseModel):

@@ -42,7 +42,10 @@ def kill_process_tree(pid: int) -> bool:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            os.kill(pid, 15)
+            try:
+                os.killpg(os.getpgid(pid), 15)
+            except Exception:
+                os.kill(pid, 15)
         return True
     except Exception:
         return False
@@ -56,23 +59,35 @@ def is_port_open(host: str, port: int, timeout: float = 0.8) -> bool:
         return False
 
 def find_xray_binary() -> Optional[Path]:
+    bin_name = "xray.exe" if os.name == "nt" else "xray"
+
+    # 1. System PATH
+    w = shutil.which(bin_name)
+    if w:
+        return Path(w)
+
     candidates: List[Path] = [
-        Path("C:/Program Files/FlyFrogLLC/Happ/core/xray.exe"),
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Xray" / "xray.exe",
-        BASE_DIR / "xray.exe",
-        DATA_DIR / "xray" / "xray.exe",
+        BASE_DIR / bin_name,
+        BASE_DIR / "bin" / bin_name,
+        DATA_DIR / "xray" / bin_name,
+        Path("/usr/local/bin") / bin_name,
+        Path("/usr/bin") / bin_name,
+        Path.home() / ".local" / "bin" / bin_name,
     ]
+    if os.name == "nt":
+        candidates.extend([
+            Path("C:/Program Files/FlyFrogLLC/Happ/core/xray.exe"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Xray" / "xray.exe",
+        ])
+
     for c in candidates:
         if c.exists() and c.is_file():
+            if os.name != "nt":
+                try:
+                    os.chmod(c, 0o755)
+                except Exception:
+                    pass
             return c
-
-    # System PATH
-    bin_name = "xray.exe" if os.name == "nt" else "xray"
-    path_env = os.environ.get("PATH", "")
-    for p in path_env.split(os.pathsep):
-        candidate = Path(p.strip()) / bin_name
-        if candidate.exists() and candidate.is_file():
-            return candidate
 
     return None
 
@@ -142,7 +157,7 @@ class VlessManager:
         # 2. Check binary
         binary = find_xray_binary()
         if not binary:
-            err = "Не найден исполняемый файл xray.exe для запуска VLESS"
+            err = "Не найден исполняемый файл Xray (xray/xray.exe) для запуска VLESS"
             add_log("ERROR", err)
             return {"success": False, "error": err}
 
@@ -152,21 +167,21 @@ class VlessManager:
             add_log("ERROR", err)
             return {"success": False, "error": err}
 
-        # 4. Launch xray.exe run -c vpn.txt
+        # 4. Launch xray run -c vpn.txt
         cmd = [str(binary), "run", "-c", str(VPN_TXT_PATH)]
-        creationflags = 0
+        popen_kwargs: Dict[str, Any] = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
         if os.name == "nt":
-            creationflags = subprocess.CREATE_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        else:
+            popen_kwargs["start_new_session"] = True
 
         try:
             add_log("INFO", f"⚡ Запуск службы VLESS: {cmd[0]} run -c {VPN_TXT_PATH.name}...")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                creationflags=creationflags
-            )
+            proc = subprocess.Popen(cmd, **popen_kwargs)
             self._process = proc
             PID_FILE.write_text(str(proc.pid), encoding="utf-8")
 
@@ -180,7 +195,7 @@ class VlessManager:
                 if proc.poll() is not None:
                     return {
                         "success": False,
-                        "error": f"xray.exe аварийно завершился с кодом {proc.returncode}"
+                        "error": f"xray аварийно завершился с кодом {proc.returncode}"
                     }
                 time.sleep(0.5)
 
@@ -195,7 +210,7 @@ class VlessManager:
             else:
                 return {
                     "success": False,
-                    "error": f"xray.exe запущен (PID {proc.pid}), но порт {port} не открылся за {wait_seconds}с."
+                    "error": f"xray запущен (PID {proc.pid}), но порт {port} не открылся за {wait_seconds}с."
                 }
         except Exception as e:
             err = f"Ошибка запуска VLESS: {str(e)}"

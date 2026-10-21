@@ -33,8 +33,8 @@ module.exports = {
       merge_logs: true,
       time: true,
       env: {
-        HOST: '0.0.0.0',
-        PORT: 80,
+        HOST: process.env.HOST || '0.0.0.0',
+        PORT: process.env.PORT || 80,
         PYTHONUNBUFFERED: '1',
       },
     },

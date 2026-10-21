@@ -124,6 +124,12 @@
                     </svg>
                     ✏️ Редактор всех постов
                 </button>
+                <button class="tab-btn" data-tab="tab-popular">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    💬 Популярные & Комментарии
+                </button>
                 <button class="tab-btn" data-tab="tab-account">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
@@ -1295,6 +1301,334 @@
                 </div>
             </section>
 
+            <!-- TAB: POPULAR & COMMENTS -->
+            <section id="tab-popular" class="tab-content">
+                <!-- Stat Cards Grid -->
+                <div class="grid-4" style="margin-bottom: 1.5rem;">
+                    <div class="stat-card">
+                        <div class="stat-icon purple">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statPopularTotal">0</div>
+                            <div class="stat-label">Видео в Популярном</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon cyan">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 11l3 3L22 4"></path>
+                                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statPopularSelected">0</div>
+                            <div class="stat-label">Выбрано галочками</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon green">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statPopularSuccess">0</div>
+                            <div class="stat-label">Успешно оставлено</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon amber">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="stat-value" id="statPopularStatusText" style="font-size: 1.15rem; font-weight: 700; color: var(--accent-amber);">Ожидание</div>
+                            <div class="stat-label">Статус авто-комментера</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section Sub-Navigation Tabs -->
+                <div class="subnav-container" style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+                    <button class="subtab-btn active" id="subtab-btn-pop-videos" onclick="switchPopularSubtab('videos')" style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                        <span>🎬</span> Видео в Популярном
+                    </button>
+                    <button class="subtab-btn" id="subtab-btn-pop-batch" onclick="switchPopularSubtab('batch')" style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                        <span>🤖</span> Авто-комментирование (Бот)
+                    </button>
+                    <button class="subtab-btn" id="subtab-btn-pop-history" onclick="switchPopularSubtab('history')" style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                        <span>📜</span> История комментариев (<span id="popHistoryBadgeCount">0</span>)
+                    </button>
+                </div>
+
+                <!-- SUBTAB 1: POPULAR VIDEOS GALLERY & MANUAL COMMENTING -->
+                <div id="pop-subtab-videos" class="pop-subtab-pane active">
+                    <!-- Control Bar -->
+                    <div class="card" style="margin-bottom: 1.25rem; padding: 1rem 1.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1; min-width: 280px;">
+                                <div style="position: relative; flex: 1;">
+                                    <input type="text" id="popularSearchInput" class="form-input" placeholder="🔍 Поиск по названию или FID..." style="width: 100%; padding-left: 2.2rem; font-size: 0.88rem;" oninput="filterPopularVideos()">
+                                    <span style="position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.9rem;">🔎</span>
+                                </div>
+                                <select id="popularLimitSelect" class="form-input" style="width: 130px; font-size: 0.85rem;" onchange="loadPopularVideos(true)">
+                                    <option value="20">20 видео</option>
+                                    <option value="50" selected>50 видео</option>
+                                    <option value="100">100 видео</option>
+                                    <option value="150">150 видео</option>
+                                    <option value="200">200 видео</option>
+                                </select>
+                            </div>
+
+                            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                <label style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--text-secondary); cursor: pointer; user-select: none;">
+                                    <input type="checkbox" id="selectAllPopularCheck" onchange="toggleSelectAllPopular(this.checked)" style="cursor: pointer; width: 16px; height: 16px;">
+                                    <span>Выбрать все</span>
+                                </label>
+                                <button class="btn btn-secondary btn-sm" id="btnRefreshPopular" onclick="loadPopularVideos(true)" style="display: inline-flex; align-items: center; gap: 0.4rem;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="23 4 23 10 17 10"></polyline>
+                                        <polyline points="1 20 1 14 7 14"></polyline>
+                                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                    </svg>
+                                    <span>Обновить Популярные</span>
+                                </button>
+                                <button class="btn btn-primary btn-sm" onclick="goToBatchWithSelected()" style="display: inline-flex; align-items: center; gap: 0.4rem; background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); border: none;">
+                                    <span>🤖</span> Комментировать выбранные (<span id="btnSelectedCount">0</span>)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Loader Indicator -->
+                    <div id="popularVideosLoader" style="display: none; text-align: center; padding: 3rem 1rem;">
+                        <div class="loader-spinner" style="margin: 0 auto 1rem auto; width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--accent-cyan); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                        <div style="color: var(--text-secondary); font-size: 0.9rem;">Загрузка популярных видео с wvids.com...</div>
+                    </div>
+
+                    <!-- Videos Grid Container -->
+                    <div id="popularVideosGrid" class="popular-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.25rem;">
+                        <!-- Dynamically filled with popular video cards -->
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="popularVideosEmpty" class="card" style="display: none; text-align: center; padding: 3rem 1rem;">
+                        <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🎬</div>
+                        <h4 style="margin: 0 0 0.5rem 0; color: #fff;">Популярные видео не найдены</h4>
+                        <p style="margin: 0 0 1.25rem 0; color: var(--text-muted); font-size: 0.88rem;">Нажмите кнопку «Обновить Популярные», чтобы получить свежую ленту с сайта wvids.com</p>
+                        <button class="btn btn-primary btn-sm" onclick="loadPopularVideos(true)">🔄 Загрузить сейчас</button>
+                    </div>
+                </div>
+
+                <!-- SUBTAB 2: AUTOMATED BATCH COMMENTER / SPAMMER -->
+                <div id="pop-subtab-batch" class="pop-subtab-pane" style="display: none;">
+                    <div class="grid-2" style="align-items: start;">
+                        <!-- Left Column: Settings & Templates -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                    </svg>
+                                    Настройки массового авто-комментирования
+                                </div>
+                            </div>
+
+                            <div style="padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem;">
+                                <!-- Target Scope Selection -->
+                                <div>
+                                    <label class="form-label" style="margin-bottom: 0.6rem; font-weight: 600;">🎯 Какие видео комментировать:</label>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem;">
+                                        <label class="radio-card" style="padding: 0.6rem 0.8rem; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; display: flex; align-items: center; gap: 0.6rem;">
+                                            <input type="radio" name="batchPopularTarget" value="all" checked onchange="updateBatchTargetScope()">
+                                            <span style="font-size: 0.85rem;">Все популярные (<span id="scopeAllCount">0</span> шт.)</span>
+                                        </label>
+                                        <label class="radio-card" style="padding: 0.6rem 0.8rem; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; display: flex; align-items: center; gap: 0.6rem;">
+                                            <input type="radio" name="batchPopularTarget" value="top5" onchange="updateBatchTargetScope()">
+                                            <span style="font-size: 0.85rem;">Топ-5 первых видео</span>
+                                        </label>
+                                        <label class="radio-card" style="padding: 0.6rem 0.8rem; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; display: flex; align-items: center; gap: 0.6rem;">
+                                            <input type="radio" name="batchPopularTarget" value="top10" onchange="updateBatchTargetScope()">
+                                            <span style="font-size: 0.85rem;">Топ-10 первых видео</span>
+                                        </label>
+                                        <label class="radio-card" style="padding: 0.6rem 0.8rem; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; display: flex; align-items: center; gap: 0.6rem;">
+                                            <input type="radio" name="batchPopularTarget" value="selected" onchange="updateBatchTargetScope()">
+                                            <span style="font-size: 0.85rem;">Выбранные галочками (<span id="scopeSelectedCount">0</span> шт.)</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <!-- Comment Templates with Spintax -->
+                                <div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                                        <label class="form-label" style="margin: 0; font-weight: 600;">
+                                            📝 Шаблоны комментариев (каждый с новой строки):
+                                        </label>
+                                        <div style="display: flex; gap: 0.5rem;">
+                                            <button type="button" class="btn btn-secondary btn-xs" onclick="insertPopularCommentPresets()" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" title="Заполнить готовыми шаблонами">
+                                                📋 Примеры
+                                            </button>
+                                            <button type="button" class="btn btn-secondary btn-xs" onclick="testSpintaxPreview()" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" title="Сгенерировать случайный вариант из текста">
+                                                🎲 Тест Spintax
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <textarea id="popularBatchTemplates" class="form-input" rows="6" style="width: 100%; font-size: 0.85rem; font-family: 'JetBrains Mono', monospace; line-height: 1.45; resize: vertical;" placeholder="{Классное|Супер|Огонь|Отличное} видео! 🔥&#10;Очень крутой контент, {лайк|подписка|зачёт} 👍&#10;{Вау|Шикарно}, спасибо за ролик! ✨"></textarea>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.35rem; font-size: 0.75rem; color: var(--text-muted);">
+                                        <span>Поддерживается Spintax: <code>{Класс|Огонь|Супер}</code> и случайный выбор строк</span>
+                                        <span id="templatesCountBadge">0 строк</span>
+                                    </div>
+
+                                    <!-- Spintax Live Result Preview Box -->
+                                    <div id="spintaxPreviewContainer" style="display: none; margin-top: 0.6rem; padding: 0.6rem 0.85rem; background: rgba(6, 182, 212, 0.1); border-left: 3px solid var(--accent-cyan); border-radius: 4px; font-size: 0.82rem; color: #fff;">
+                                        <div style="font-size: 0.75rem; color: var(--accent-cyan); font-weight: 700; margin-bottom: 0.2rem;">🎲 Случайный сгенерированный результат:</div>
+                                        <div id="spintaxPreviewText" style="font-style: italic;"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Delay & Jitter -->
+                                <div class="grid-2" style="gap: 1rem;">
+                                    <div>
+                                        <label class="form-label" style="font-size: 0.8rem; margin-bottom: 0.3rem;">Мин. задержка (сек):</label>
+                                        <input type="number" id="popularBatchDelayMin" class="form-input" value="5" min="1" max="60" style="width: 100%;">
+                                    </div>
+                                    <div>
+                                        <label class="form-label" style="font-size: 0.8rem; margin-bottom: 0.3rem;">Макс. задержка (сек):</label>
+                                        <input type="number" id="popularBatchDelayMax" class="form-input" value="12" min="1" max="120" style="width: 100%;">
+                                    </div>
+                                </div>
+
+                                <!-- Multi-Account Rotation -->
+                                <div>
+                                    <label class="form-label" style="margin-bottom: 0.4rem; font-weight: 600;">👥 Выбор аккаунтов (ротация при комментировании):</label>
+                                    <div id="popularBatchAccountsList" style="max-height: 120px; overflow-y: auto; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.5rem;">
+                                        <!-- Loaded dynamically -->
+                                    </div>
+                                    <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.3rem;">
+                                        Если выбрано несколько аккаунтов, комментарии будут публиковаться поочередно по кругу.
+                                    </div>
+                                </div>
+
+                                <!-- Action Buttons -->
+                                <div style="display: flex; gap: 0.75rem; margin-top: 0.5rem;">
+                                    <button class="btn btn-primary" id="btnStartPopularBatch" onclick="startPopularBatchComment()" style="flex: 1; justify-content: center; background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); border: none; font-weight: 700;">
+                                        <span>🚀</span> Запустить авто-комментирование
+                                    </button>
+                                    <button class="btn btn-secondary" id="btnStopPopularBatch" onclick="stopPopularBatchComment()" style="display: none; background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.4); color: #f87171; font-weight: 700;">
+                                        <span>⏹️</span> Остановить
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Live Status & Terminal Logs -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2">
+                                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                                    </svg>
+                                    Прогресс выполнения и лог событий
+                                </div>
+                            </div>
+
+                            <div style="padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem;">
+                                <!-- Live Progress Indicator -->
+                                <div>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem;">
+                                        <span id="popularBatchProgressStatus" style="font-weight: 600; color: #fff;">Ожидание запуска</span>
+                                        <span id="popularBatchProgressPercent" style="color: var(--accent-cyan); font-weight: 700;">0%</span>
+                                    </div>
+                                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden;">
+                                        <div id="popularBatchProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent-cyan), var(--accent-green)); transition: width 0.3s ease;"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Counters Row -->
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;">
+                                    <div style="background: var(--bg-card-subtle); padding: 0.6rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); text-align: center;">
+                                        <div style="font-size: 0.75rem; color: var(--text-muted);">Всего в очереди</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: #fff;" id="batchQueueCount">0</div>
+                                    </div>
+                                    <div style="background: var(--bg-card-subtle); padding: 0.6rem; border-radius: var(--radius-sm); border: 1px solid rgba(16, 185, 129, 0.2); text-align: center;">
+                                        <div style="font-size: 0.75rem; color: var(--accent-green);">Успешно</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: var(--accent-green);" id="batchSuccessCount">0</div>
+                                    </div>
+                                    <div style="background: var(--bg-card-subtle); padding: 0.6rem; border-radius: var(--radius-sm); border: 1px solid rgba(239, 68, 68, 0.2); text-align: center;">
+                                        <div style="font-size: 0.75rem; color: var(--accent-red);">Ошибок</div>
+                                        <div style="font-size: 1.2rem; font-weight: 700; color: var(--accent-red);" id="batchErrorCount">0</div>
+                                    </div>
+                                </div>
+
+                                <!-- Terminal Console Logs -->
+                                <div>
+                                    <div style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.4rem; display: flex; justify-content: space-between;">
+                                        <span>Консоль авто-комментера:</span>
+                                        <span style="font-size: 0.72rem; color: var(--text-muted);">Автоматический скролл</span>
+                                    </div>
+                                    <div id="popularBatchLogsTerminal" style="background: #060911; border: 1px solid var(--border-color); border-radius: var(--radius-sm); height: 260px; overflow-y: auto; padding: 0.75rem; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; line-height: 1.5; color: #94a3b8; display: flex; flex-direction: column; gap: 0.25rem;">
+                                        <div style="color: var(--text-muted); font-style: italic;">Логи выполнения появятся здесь после запуска...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUBTAB 3: COMMENTS HISTORY TABLE -->
+                <div id="pop-subtab-history" class="pop-subtab-pane" style="display: none;">
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                                    <path d="M12 8v4l3 3"></path>
+                                    <circle cx="12" cy="12" r="9"></circle>
+                                </svg>
+                                История всех комментариев
+                            </div>
+                            <div style="display: flex; gap: 0.6rem;">
+                                <button class="btn btn-secondary btn-sm" onclick="loadPopularCommentHistory()">
+                                    🔄 Обновить
+                                </button>
+                                <button class="btn btn-secondary btn-sm" onclick="clearPopularCommentHistory()" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;">
+                                    🗑️ Очистить историю
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 140px;">Время</th>
+                                        <th style="width: 130px;">Аккаунт</th>
+                                        <th>Видео (Заголовок / FID)</th>
+                                        <th>Текст комментария</th>
+                                        <th style="width: 110px;">Статус</th>
+                                        <th style="width: 100px; text-align: right;">Действие</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="popularHistoryTableBody">
+                                    <tr>
+                                        <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                                            История комментариев пуста. Опубликуйте комментарий вручную или запустите авто-комментер.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- TAB 3: ACCOUNT & NICKNAME -->
             <section id="tab-account" class="tab-content">
                 <div class="grid-2">
@@ -1845,6 +2179,73 @@
                 <button type="button" class="btn btn-secondary" onclick="closeVlessConfigModal()">Отмена</button>
                 <button type="button" class="btn btn-primary" id="btnApplyVlessConfig" onclick="applyVlessConfigSubmit()" style="background: var(--accent-green); color: #000; font-weight: 700;">
                     ⚡ Сохранить и применить
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QUICK COMMENT MODAL -->
+    <div id="quickCommentModal" class="modal-backdrop" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px); z-index: 1050; align-items: center; justify-content: center;">
+        <div class="card" style="width: 100%; max-width: 580px; margin: 1rem; border: 1px solid var(--border-glow); box-shadow: 0 10px 40px rgba(0,0,0,0.8); overflow: hidden; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="card-header" style="padding: 1.1rem 1.4rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                    <div style="width: 32px; height: 32px; border-radius: var(--radius-sm); background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); display: flex; align-items: center; justify-content: center; font-size: 1rem;">
+                        💬
+                    </div>
+                    <h3 style="margin: 0; font-size: 1.1rem; font-weight: 700; color: #fff;">Комментирование видео</h3>
+                </div>
+                <button type="button" onclick="closeQuickCommentModal()" style="background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; padding: 0.2rem 0.5rem; line-height: 1;">&times;</button>
+            </div>
+
+            <div style="padding: 1.25rem 1.4rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem;">
+                <!-- Video Info Snippet -->
+                <div style="display: flex; gap: 0.85rem; padding: 0.75rem; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); align-items: center;">
+                    <img id="quickCommentThumb" src="" alt="" style="width: 68px; height: 48px; object-fit: cover; border-radius: 4px; background: #000; flex-shrink: 0;">
+                    <div style="flex: 1; min-width: 0;">
+                        <h4 id="quickCommentTitle" style="margin: 0 0 0.25rem 0; font-size: 0.9rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">-</h4>
+                        <div style="display: flex; gap: 0.6rem; font-size: 0.75rem; color: var(--text-muted); flex-wrap: wrap;">
+                            <span>FID: <strong id="quickCommentFid" style="color: var(--accent-cyan);">-</strong></span>
+                            <span>Автор: <span id="quickCommentUid">-</span></span>
+                            <a id="quickCommentLink" href="#" target="_blank" style="color: var(--accent-cyan); text-decoration: none;">🔗 Открыть пост</a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Account Selector -->
+                <div>
+                    <label class="form-label" style="font-size: 0.82rem; margin-bottom: 0.35rem; font-weight: 600;">От лица какого аккаунта комментировать:</label>
+                    <select id="quickCommentAccountSelect" class="form-input" style="width: 100%;">
+                        <!-- Dynamically filled -->
+                    </select>
+                </div>
+
+                <!-- Comment Textarea -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                        <label class="form-label" style="margin: 0; font-size: 0.82rem; font-weight: 600;">Текст комментария:</label>
+                        <button type="button" class="btn btn-secondary btn-xs" onclick="generateQuickSpintax()" style="font-size: 0.72rem; padding: 0.15rem 0.4rem;">
+                            🎲 Spintax
+                        </button>
+                    </div>
+                    <textarea id="quickCommentTextInput" class="form-input" rows="3" style="width: 100%; font-size: 0.88rem; line-height: 1.45; resize: vertical;" placeholder="Напишите комментарий... Поддерживается {Класс|Огонь|Супер}"></textarea>
+                </div>
+
+                <!-- Existing Comments Accordion -->
+                <div style="border-top: 1px solid var(--border-color); padding-top: 0.85rem;">
+                    <button type="button" onclick="toggleQuickCommentExisting()" style="background: none; border: none; color: var(--text-secondary); font-size: 0.82rem; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; padding: 0;">
+                        <span id="quickCommentExistingArrow">▶</span>
+                        <span>Посмотреть существующие комментарии на видео (<span id="quickCommentExistingCount">0</span>)</span>
+                    </button>
+                    <div id="quickCommentExistingList" style="display: none; margin-top: 0.6rem; max-height: 150px; overflow-y: auto; background: var(--bg-card-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.5rem; font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.4rem;">
+                        <div style="color: var(--text-muted); font-style: italic;">Загрузка...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="padding: 0.9rem 1.4rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 0.75rem; background: rgba(0, 0, 0, 0.25);">
+                <button type="button" class="btn btn-secondary" onclick="closeQuickCommentModal()">Отмена</button>
+                <button type="button" class="btn btn-primary" id="btnSubmitQuickComment" onclick="submitQuickComment()" style="background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); border: none; font-weight: 700;">
+                    <span>💬</span> Опубликовать комментарий
                 </button>
             </div>
         </div>

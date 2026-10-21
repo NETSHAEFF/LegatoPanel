@@ -19,6 +19,7 @@ from backend.client import WvidsClient
 from backend.uploader import ContentUploader
 from backend.fingerprint import parse_cookies_input
 from backend.tor import check_tor_connection, auto_detect_tor_port, tor_manager
+from backend.vless import check_vless_connection, vless_manager
 from backend.batch_worker import batch_worker
 
 def get_client() -> WvidsClient:
@@ -128,6 +129,51 @@ async def cmd_tor(args):
         print(f" 🔒 DNS Резолвинг:      Удаленный (Zero-Leak via socks5h://)")
     else:
         print(" 🧅 Tor Сеть:           ОТКЛЮЧЕНО / ОШИБКА")
+        print(f" [!] {status.get('error')}")
+    print("=" * 55)
+
+async def cmd_vless(args):
+    action = getattr(args, "action", "status")
+    port = args.port or 10808
+    if action == "start":
+        print("[*] ⚡ Запуск службы VLESS Reality (xray)...")
+        res = vless_manager.start(port=port)
+        if res.get("success"):
+            print(f"[+] {res.get('message', 'VLESS успешно запущен')}")
+            st = check_vless_connection(port=port)
+            if st.get("connected"):
+                print(f"[+] 🌐 Внешний IP через VLESS: {st.get('ip')}")
+            print(f"[*] Для удержания службы нажмите Ctrl+C для выхода.")
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print("\n[*] Остановка VLESS...")
+                vless_manager.stop()
+                print("[+] Служба VLESS остановлена.")
+        else:
+            print(f"[!] {res.get('error', 'Ошибка запуска VLESS')}")
+        return
+    elif action == "stop":
+        print("[*] ⚡ Остановка фонового VLESS...")
+        res = vless_manager.stop()
+        print(f"[+] {res.get('message')}")
+        return
+
+    print("[*] Проверка подключения VLESS Reality...")
+    status = check_vless_connection(port=port)
+    mgr_status = vless_manager.get_status()
+
+    print("=" * 55)
+    if status.get("connected"):
+        print(f" ⚡ VLESS Reality:      ПОДКЛЮЧЕНО")
+        print(f" 🌐 Выходной IP:        {status.get('ip')}")
+        print(f" 🔌 Локальный порт:     {port}")
+        if mgr_status.get("pid"):
+            print(f" ⚙️  PID процесса:       {mgr_status.get('pid')}")
+        print(f" ⏱️  Задержка:           {status.get('latency_ms')} мс")
+    else:
+        print(" ⚡ VLESS Reality:      ОТКЛЮЧЕНО / ОШИБКА")
         print(f" [!] {status.get('error')}")
     print("=" * 55)
 
@@ -259,6 +305,40 @@ async def cmd_redact_all(args):
 
     print(f"\n[+] 🎉 Завершено! Успешно обновлено: {success_cnt}/{len(posts)}, ошибок: {fail_cnt}")
 
+async def cmd_popular_list(args):
+    client = get_client()
+    print(f"[*] Получение списка популярных видео с wvids.com (лимит: {args.limit})...")
+    videos = await client.get_popular_videos(max_items=args.limit)
+    if not videos:
+        print("[-] Популярные видео не найдены или не удалось загрузить.")
+        return
+
+    print(f"\n[+] Найдено {len(videos)} популярных видео:")
+    print("-" * 80)
+    for idx, v in enumerate(videos, 1):
+        print(f"[{idx:02d}] FID: {v['fid']:<9} | {v['title'][:35]:<35} | {v['url']}")
+    print("-" * 80)
+
+async def cmd_popular_comment(args):
+    client = get_client()
+    acc = get_active_account()
+    acc_name = acc.get("username", "Unknown") if acc else "Unknown"
+    acc_id = acc.get("id") if acc else None
+
+    from backend.popular_commenter import popular_commenter
+    print(f"[*] Отправка комментария на видео FID {args.fid} от лица @{acc_name}...")
+    res = await popular_commenter.post_single_comment(
+        client=client,
+        fid=args.fid,
+        text=args.text,
+        account_id=acc_id,
+        account_username=acc_name
+    )
+    if res.get("success"):
+        print(f"[+] ✅ Комментарий успешно опубликован! ID: {res.get('comment_id', 'ok')}")
+    else:
+        print(f"[-] ❌ Ошибка публикации: {res.get('error', 'Неизвестная ошибка')}")
+
 def main():
     parser = argparse.ArgumentParser(description="Wvids Studio CLI Automation Tool")
     subparsers = parser.add_subparsers(dest="command", help="Команда для выполнения")
@@ -295,6 +375,11 @@ def main():
     p_tor.add_argument("action", nargs="?", choices=["status", "start", "stop"], default="status", help="Действие: status, start, stop (по умолчанию: status)")
     p_tor.add_argument("--port", "-p", type=int, default=None, help="Порт SOCKS Tor (по умолчанию: 9050)")
 
+    # VLESS Reality Status & Control
+    p_vless = subparsers.add_parser("vless", help="Проверка статуса и управление VLESS Reality (Xray)")
+    p_vless.add_argument("action", nargs="?", choices=["status", "start", "stop"], default="status", help="Действие: status, start, stop (по умолчанию: status)")
+    p_vless.add_argument("--port", "-p", type=int, default=10808, help="Порт SOCKS VLESS (по умолчанию: 10808)")
+
     # Scan Posts
     p_scan = subparsers.add_parser("scan", help="Сканировать все публикации канала (page=1, 2, 3...)")
     p_scan.add_argument("--max-pages", type=int, default=50, help="Максимум страниц (по умолчанию 50)")
@@ -304,6 +389,14 @@ def main():
     p_redact.add_argument("--title", "-t", default="", help="Новый заголовок / шаблон (поддерживает {i}, {title})")
     p_redact.add_argument("--desc", "-d", default="", help="Новое описание")
     p_redact.add_argument("--max-pages", type=int, default=50, help="Максимум страниц для сканирования")
+
+    # Popular Videos & Commenting
+    p_pop_list = subparsers.add_parser("popular-list", help="Список видео из раздела Популярные")
+    p_pop_list.add_argument("--limit", "-l", type=int, default=20, help="Количество видео (по умолчанию: 20)")
+
+    p_pop_comment = subparsers.add_parser("popular-comment", help="Опубликовать комментарий на популярное видео")
+    p_pop_comment.add_argument("--fid", required=True, help="ID публикации (FID)")
+    p_pop_comment.add_argument("--text", "-t", required=True, help="Текст комментария (поддерживает spintax {вариант1|вариант2})")
 
     args = parser.parse_args()
     if not args.command:
@@ -322,10 +415,16 @@ def main():
         asyncio.run(cmd_batch(args))
     elif args.command == "tor":
         asyncio.run(cmd_tor(args))
+    elif args.command == "vless":
+        asyncio.run(cmd_vless(args))
     elif args.command == "scan":
         asyncio.run(cmd_scan(args))
     elif args.command == "redact-all":
         asyncio.run(cmd_redact_all(args))
+    elif args.command == "popular-list":
+        asyncio.run(cmd_popular_list(args))
+    elif args.command == "popular-comment":
+        asyncio.run(cmd_popular_comment(args))
 
 if __name__ == "__main__":
     main()

@@ -3,6 +3,7 @@ import json
 import time
 import base64
 import os
+import urllib.parse
 from urllib.parse import quote
 from typing import Dict, Any, Optional, Tuple, List
 from curl_cffi import requests
@@ -800,4 +801,416 @@ class WvidsClient:
                 "fid": str(fid),
                 "error": str(e)
             }
+
+    async def get_popular_videos(self, max_items: int = 50) -> List[Dict[str, Any]]:
+        """
+        Scans https://wvids.com/ to find the dynamic Popular section link (/p-...)
+        and parses popular videos across initial HTML and infinite scroll cursor API (/api/fetch_content.php).
+        """
+        session = self.get_session()
+        await human_jitter(0.2, 0.4)
+        items: List[Dict[str, Any]] = []
+        seen_fids = set()
+
+        try:
+            # Step 1: Request home page to find popular link
+            res_home = session.get(DEFAULT_HOST, timeout=15)
+            if res_home.status_code != 200:
+                add_log("ERROR", f"Не удалось загрузить главную страницу для раздела Популярное: HTTP {res_home.status_code}")
+                return []
+
+            home_html = res_home.text
+            match = re.search(r'href=["\'](https://wvids\.com/p-[^"\']+|/p-[^"\']+)["\']', home_html)
+            if not match:
+                match = re.search(r'/(p-[a-zA-Z0-9=_-]+)', home_html)
+
+            if not match:
+                add_log("WARNING", "Не удалось найти ссылку на раздел Популярное на главной странице wvids.com")
+                return []
+
+            pop_href = match.group(1)
+            pop_url = pop_href if pop_href.startswith("http") else f"{DEFAULT_HOST}/{pop_href.lstrip('/')}"
+
+            # Step 2: Fetch popular page HTML to get first batch of videos
+            res_page = session.get(
+                pop_url,
+                headers={
+                    "Referer": f"{DEFAULT_HOST}/",
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                timeout=15
+            )
+
+            if res_page.status_code != 200:
+                add_log("ERROR", f"Не удалось загрузить раздел Популярное: HTTP {res_page.status_code}")
+                return []
+
+            page_soup = BeautifulSoup(res_page.text, "html.parser")
+            boxes = page_soup.find_all(class_=lambda c: c and "boxpost" in c)
+
+            for b in boxes:
+                fid = str(b.get("id") or "").strip()
+                if not fid or fid in seen_fids:
+                    continue
+
+                slug = str(b.get("data-post") or b.get("href") or "").strip().lstrip("/")
+                uid = str(b.get("data-uid") or "").strip()
+                classes = b.get("class", [])
+                is_video = "tube" in classes
+
+                if not is_video:
+                    continue
+
+                title = ""
+                raw_str = b.get("data-raw")
+                if raw_str:
+                    try:
+                        raw_arr = json.loads(raw_str)
+                        if len(raw_arr) >= 9 and raw_arr[8]:
+                            title = str(raw_arr[8]).strip()
+                    except Exception:
+                        pass
+
+                if not title:
+                    title = slug or f"Video #{fid}"
+
+                img = b.find("img")
+                thumbnail = ""
+                if img:
+                    thumbnail = img.get("src") or img.get("data-src") or ""
+                    if thumbnail and thumbnail.startswith("/"):
+                        thumbnail = f"{DEFAULT_HOST}{thumbnail}"
+
+                item = {
+                    "fid": fid,
+                    "slug": slug,
+                    "uid": uid,
+                    "title": title,
+                    "is_video": True,
+                    "url": f"{DEFAULT_HOST}/{slug}" if slug else f"{DEFAULT_HOST}/v/{fid}",
+                    "thumbnail": thumbnail,
+                    "page": 1
+                }
+
+                seen_fids.add(fid)
+                items.append(item)
+                if len(items) >= max_items:
+                    return items
+
+            # Step 3: Check cursor on .fget to load more popular videos via /api/fetch_content.php
+            fget = page_soup.find(class_="fget")
+            cursor = None
+            has_more = False
+            if fget:
+                cursor_str = fget.get("data-cursor")
+                has_more = fget.get("data-has-more") == "1"
+                if cursor_str:
+                    try:
+                        cursor = json.loads(cursor_str)
+                    except Exception:
+                        cursor = None
+
+            page_num = 2
+            while has_more and cursor and len(items) < max_items:
+                await human_jitter(0.1, 0.25)
+                cursor_enc = urllib.parse.quote(json.dumps(cursor))
+                api_url = f"{DEFAULT_HOST}/api/fetch_content.php?categories=top&cursor={cursor_enc}"
+
+                res_api = session.get(
+                    api_url,
+                    headers={
+                        "Referer": pop_url,
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    timeout=15
+                )
+
+                if res_api.status_code != 200:
+                    break
+
+                try:
+                    api_data = res_api.json()
+                except Exception:
+                    break
+
+                api_items = api_data.get("i", [])
+                if not api_items:
+                    break
+
+                for raw_item in api_items:
+                    # [type, fid, slug, uid, duration, ..., views, comments, title]
+                    if len(raw_item) < 3:
+                        continue
+                    item_type = raw_item[0]
+                    if item_type != 1:  # 1 = video/tube
+                        continue
+
+                    fid = str(raw_item[1])
+                    if fid in seen_fids:
+                        continue
+
+                    slug = str(raw_item[2])
+                    uid = str(raw_item[3]) if len(raw_item) > 3 else ""
+                    title = raw_item[8] if len(raw_item) >= 9 and raw_item[8] else (slug or f"Video #{fid}")
+
+                    seen_fids.add(fid)
+                    items.append({
+                        "fid": fid,
+                        "slug": slug,
+                        "uid": uid,
+                        "title": str(title).strip(),
+                        "is_video": True,
+                        "url": f"{DEFAULT_HOST}/{slug}" if slug else f"{DEFAULT_HOST}/v/{fid}",
+                        "thumbnail": f"{DEFAULT_HOST}/images/image-blank.gif",
+                        "page": page_num
+                    })
+
+                    if len(items) >= max_items:
+                        break
+
+                cursor = api_data.get("n")
+                has_more = bool(api_data.get("h")) and bool(cursor)
+                page_num += 1
+
+            return items
+
+        except Exception as e:
+            add_log("ERROR", f"Ошибка получения популярных видео: {str(e)}")
+            return items
+
+    async def get_video_comments(self, fid: str, page: int = 0) -> Dict[str, Any]:
+        """
+        Retrieves comments and likes for a specific video post.
+        """
+        session = self.get_session()
+        await human_jitter(0.1, 0.25)
+        clean_fid = str(fid).strip()
+
+        try:
+            headers = {
+                "Origin": DEFAULT_HOST,
+                "Referer": f"{DEFAULT_HOST}/",
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+
+            # 1. Get comments HTML
+            res = session.post(
+                f"{DEFAULT_HOST}/api/comments.php?getcontent",
+                data={"page": page, "fid": clean_fid},
+                headers=headers,
+                timeout=15
+            )
+
+            comments_list: List[Dict[str, Any]] = []
+            html_content = ""
+
+            if res.status_code == 200:
+                try:
+                    j_data = res.json()
+                    html_content = j_data.get("data", {}).get("html", "")
+                    if html_content:
+                        c_soup = BeautifulSoup(html_content, "html.parser")
+                        for c_div in c_soup.find_all(class_="comment"):
+                            cid = c_div.get("data-id")
+                            author_tag = c_div.find(class_=re.compile(r'login|author|user', re.I))
+                            text_tag = c_div.find(class_=re.compile(r'text|msg|content', re.I))
+                            time_tag = c_div.find(class_=re.compile(r'date|time', re.I))
+
+                            comments_list.append({
+                                "cid": cid,
+                                "author": author_tag.get_text(strip=True) if author_tag else "User",
+                                "text": text_tag.get_text(strip=True) if text_tag else c_div.get_text(strip=True),
+                                "time": time_tag.get_text(strip=True) if time_tag else ""
+                            })
+                except Exception:
+                    pass
+
+            # 2. Get likes info
+            likes_count = 0
+            try:
+                res_like = session.post(
+                    f"{DEFAULT_HOST}/api/comments.php?getlike",
+                    data={"fid": clean_fid},
+                    headers=headers,
+                    timeout=10
+                )
+                if res_like.status_code == 200:
+                    l_data = res_like.json()
+                    likes_arr = l_data.get("data", {}).get("likes", [])
+                    likes_count = len(likes_arr) if isinstance(likes_arr, list) else 0
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "fid": clean_fid,
+                "comments": comments_list,
+                "html": html_content,
+                "likes_count": likes_count,
+                "total_comments": len(comments_list)
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "fid": clean_fid,
+                "comments": [],
+                "error": str(e)
+            }
+
+    async def post_comment(
+        self,
+        fid: str,
+        text: str,
+        reply_to: Optional[str] = None,
+        slug: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Posts a comment on a video via POST https://wvids.com/api/comments.php?write.
+        Includes anti-detect human jitter and suspension checks.
+        """
+        session = self.get_session()
+        await human_jitter(0.2, 0.5)
+        clean_fid = str(fid).strip()
+        clean_text = str(text).strip()
+
+        if not clean_text:
+            return {"success": False, "error": "Текст комментария не может быть пустым"}
+
+        headers = {
+            "Origin": DEFAULT_HOST,
+            "Referer": f"{DEFAULT_HOST}/{slug}" if slug else f"{DEFAULT_HOST}/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+
+        # Warm up session with get_view if slug provided
+        if slug or clean_fid:
+            try:
+                session.post(
+                    f"{DEFAULT_HOST}/api/get_view.php?fid={clean_fid}",
+                    data="message=1",
+                    headers=headers,
+                    timeout=10
+                )
+            except Exception:
+                pass
+
+        auth_sess_backup = None
+        try:
+            body_data = {
+                "msg": clean_text,
+                "fid": clean_fid,
+                "reply": str(reply_to).strip() if reply_to else ""
+            }
+
+            # Server-side fix for wvids.com PHP 8 TypeError:
+            # When auth_sess is present, wvids.com's session handler passes $userId as string
+            # into getUserBlockStatus(?int $authorId, ?int $userId), crashing with TypeError 400.
+            # Temporarily popping auth_sess forces authentication via auth_user_id + auth_p,
+            # which passes $userId as an integer and publishes comments with 100% success.
+            if "auth_sess" in session.cookies:
+                auth_sess_backup = session.cookies.pop("auth_sess", None)
+
+            res = session.post(
+                f"{DEFAULT_HOST}/api/comments.php?write",
+                data=body_data,
+                headers=headers,
+                timeout=20
+            )
+
+            # Check if account was suspended
+            is_susp, susp_reason = check_response_for_suspension(res.text, res.status_code)
+            if is_susp:
+                return {
+                    "success": False,
+                    "is_suspended": True,
+                    "error": f"Аккаунт заблокирован: {susp_reason}"
+                }
+
+            if res.status_code == 200:
+                try:
+                    res_json = res.json()
+                except Exception:
+                    res_json = {}
+
+                if res_json.get("success"):
+                    html = res_json.get("data", {}).get("html", "")
+                    cid_match = re.search(r'data-id=["\'](\d+)["\']', html)
+                    cid = cid_match.group(1) if cid_match else (res_json.get("data", {}).get("commentId"))
+
+                    return {
+                        "success": True,
+                        "fid": clean_fid,
+                        "comment_id": cid,
+                        "html": html,
+                        "data": res_json.get("data")
+                    }
+                else:
+                    err_msg = res_json.get("error") or "Не удалось опубликовать комментарий"
+                    return {
+                        "success": False,
+                        "fid": clean_fid,
+                        "error": err_msg
+                    }
+            else:
+                try:
+                    res_json = res.json()
+                    err_msg = res_json.get("error") or f"HTTP {res.status_code}"
+                except Exception:
+                    err_msg = f"HTTP {res.status_code}: {res.text[:120]}"
+
+                return {
+                    "success": False,
+                    "fid": clean_fid,
+                    "error": err_msg
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "fid": clean_fid,
+                "error": f"Сетевая ошибка при публикации комментария: {str(e)}"
+            }
+        finally:
+            if auth_sess_backup is not None:
+                session.cookies["auth_sess"] = auth_sess_backup
+
+    async def delete_comment(self, fid: str, cid: str) -> Dict[str, Any]:
+        """
+        Deletes a previously published comment via POST https://wvids.com/api/comments.php?delete.
+        """
+        session = self.get_session()
+        await human_jitter(0.15, 0.3)
+        headers = {
+            "Origin": DEFAULT_HOST,
+            "Referer": f"{DEFAULT_HOST}/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+
+        auth_sess_backup = None
+        try:
+            if "auth_sess" in session.cookies:
+                auth_sess_backup = session.cookies.pop("auth_sess", None)
+
+            res = session.post(
+                f"{DEFAULT_HOST}/api/comments.php?delete",
+                data={"cid": str(cid).strip(), "fid": str(fid).strip()},
+                headers=headers,
+                timeout=15
+            )
+            if res.status_code == 200:
+                try:
+                    j_data = res.json()
+                    return {"success": j_data.get("success", True)}
+                except Exception:
+                    return {"success": True}
+            return {"success": False, "error": f"HTTP {res.status_code}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            if auth_sess_backup is not None:
+                session.cookies["auth_sess"] = auth_sess_backup
 

@@ -12,8 +12,6 @@ import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, Tuple, List
-import ctypes
-from ctypes import wintypes
 
 from .config import BASE_DIR, UPLOADS_DIR
 from .storage import get_processing_settings, add_log
@@ -86,10 +84,14 @@ def find_ffmpeg() -> str:
     candidates = [
         BASE_DIR / "ffmpeg",
         BASE_DIR / "ffmpeg.exe",
+        BASE_DIR / "bin" / "ffmpeg",
+        BASE_DIR / "bin" / "ffmpeg.exe",
         BASE_DIR / "backend" / "bin" / "ffmpeg",
         BASE_DIR / "backend" / "bin" / "ffmpeg.exe",
         Path("/usr/bin/ffmpeg"),
         Path("/usr/local/bin/ffmpeg"),
+        Path("/bin/ffmpeg"),
+        Path.home() / ".local" / "bin" / "ffmpeg",
         Path("C:/Coding/LegatoPanel/ffmpeg.exe"),
         Path("C:/Coding/MetaChandger/ffmpeg.exe"),
         Path("C:/Coding/Poster/dist/ffmpeg.exe"),

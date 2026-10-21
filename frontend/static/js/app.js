@@ -26,6 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(loadNetworkStatus, 25000);
     setInterval(loadBatchStatus, 2500);
     setInterval(loadBulkRedactStatus, 2000);
+    setInterval(loadPopularBatchStatus, 2500);
 });
 
 // --- Toast Notifications ---
@@ -76,6 +77,12 @@ function initTabs() {
                 }
                 if (target === "tab-processing") {
                     updateLivePreview();
+                }
+                if (target === "tab-popular") {
+                    loadPopularVideos(false);
+                    loadPopularCommentHistory();
+                    loadPopularBatchStatus();
+                    loadAccountsForPopular();
                 }
             }
         });
@@ -3243,4 +3250,777 @@ document.addEventListener("DOMContentLoaded", function() {
             }
         });
     }
+
+    const quickModal = document.getElementById("quickCommentModal");
+    if (quickModal) {
+        quickModal.addEventListener("click", function(e) {
+            if (e.target === quickModal) {
+                closeQuickCommentModal();
+            }
+        });
+    }
+
+    const templatesInput = document.getElementById("popularBatchTemplates");
+    if (templatesInput) {
+        templatesInput.addEventListener("input", function() {
+            const lines = templatesInput.value.split('\n').filter(l => l.trim().length > 0);
+            const badge = document.getElementById("templatesCountBadge");
+            if (badge) badge.textContent = `${lines.length} строк`;
+        });
+    }
 });
+
+// =========================================================
+// --- Popular Videos & Commenting Implementation ---
+// =========================================================
+
+let popularVideos = [];
+let selectedPopularFids = new Set();
+let cachedAccountsForPopular = [];
+let currentQuickCommentVideo = null;
+
+// --- Subtab Navigation ---
+window.switchPopularSubtab = function(tabName) {
+    const panes = {
+        videos: document.getElementById("pop-subtab-videos"),
+        batch: document.getElementById("pop-subtab-batch"),
+        history: document.getElementById("pop-subtab-history")
+    };
+
+    const buttons = {
+        videos: document.getElementById("subtab-btn-pop-videos"),
+        batch: document.getElementById("subtab-btn-pop-batch"),
+        history: document.getElementById("subtab-btn-pop-history")
+    };
+
+    Object.keys(panes).forEach(k => {
+        if (panes[k]) panes[k].style.display = (k === tabName) ? "block" : "none";
+        if (buttons[k]) {
+            if (k === tabName) buttons[k].classList.add("active");
+            else buttons[k].classList.remove("active");
+        }
+    });
+
+    if (tabName === "history") {
+        loadPopularCommentHistory();
+    } else if (tabName === "batch") {
+        loadAccountsForPopular();
+        updateBatchTargetScope();
+    }
+};
+
+// --- Load Popular Videos from API ---
+window.loadPopularVideos = async function(fresh = false) {
+    const loader = document.getElementById("popularVideosLoader");
+    const grid = document.getElementById("popularVideosGrid");
+    const empty = document.getElementById("popularVideosEmpty");
+    const limitSelect = document.getElementById("popularLimitSelect");
+    const limit = limitSelect ? limitSelect.value : 50;
+
+    if (loader) loader.style.display = "block";
+    if (grid) grid.style.display = "none";
+    if (empty) empty.style.display = "none";
+
+    try {
+        const res = await fetch(`/api/popular/videos?fresh=${fresh}&limit=${limit}`);
+        const data = await res.json();
+
+        if (data.success && Array.isArray(data.videos)) {
+            popularVideos = data.videos;
+            const statTotal = document.getElementById("statPopularTotal");
+            const scopeAll = document.getElementById("scopeAllCount");
+            if (statTotal) statTotal.textContent = popularVideos.length;
+            if (scopeAll) scopeAll.textContent = popularVideos.length;
+
+            renderPopularVideos();
+            if (fresh) {
+                showToast(`✅ Загружено ${popularVideos.length} популярных видео с wvids.com`, "success");
+            }
+        } else {
+            popularVideos = [];
+            if (empty) empty.style.display = "block";
+            showToast("Не удалось загрузить популярные видео", "error");
+        }
+    } catch (err) {
+        console.error("loadPopularVideos error:", err);
+        showToast("Ошибка сети при загрузке популярных видео: " + err.message, "error");
+        if (empty) empty.style.display = "block";
+    } finally {
+        if (loader) loader.style.display = "none";
+        if (grid && popularVideos.length > 0) grid.style.display = "grid";
+    }
+};
+
+// --- Render Popular Videos Grid ---
+function renderPopularVideos() {
+    const grid = document.getElementById("popularVideosGrid");
+    const empty = document.getElementById("popularVideosEmpty");
+    if (!grid) return;
+
+    if (!popularVideos || popularVideos.length === 0) {
+        grid.innerHTML = "";
+        grid.style.display = "none";
+        if (empty) empty.style.display = "block";
+        return;
+    }
+
+    if (empty) empty.style.display = "none";
+    grid.style.display = "grid";
+
+    let html = "";
+    popularVideos.forEach((v, idx) => {
+        const isSelected = selectedPopularFids.has(v.fid);
+        const thumbSrc = v.thumbnail || "/static/img/blank.png";
+        const titleSafe = escapeHtml(v.title || `Video #${v.fid}`);
+        const slugSafe = escapeHtml(v.slug || "");
+
+        html += `
+            <div class="popular-card ${isSelected ? 'selected' : ''}" id="pop-card-${v.fid}">
+                <div class="popular-card-thumb-wrap">
+                    <img class="popular-card-thumb" src="${thumbSrc}" alt="${titleSafe}" onerror="this.src='/images/image-blank.gif'; this.style.opacity='0.2';" loading="lazy">
+                    
+                    <div class="popular-card-select-overlay" title="Выбрать для авто-комментирования">
+                        <input type="checkbox" id="check-pop-${v.fid}" ${isSelected ? 'checked' : ''} onchange="togglePopularSelect('${v.fid}')">
+                    </div>
+
+                    <div class="popular-card-fid-badge" title="File ID">#${v.fid}</div>
+                    <div class="popular-card-duration-badge">🎬 Видео</div>
+                </div>
+
+                <div class="popular-card-body">
+                    <div class="popular-card-title" title="${titleSafe}">
+                        ${titleSafe}
+                    </div>
+
+                    <div class="popular-card-meta">
+                        <span>👤 Автор: <strong style="color: var(--text-primary);">${v.uid || 'N/A'}</strong></span>
+                        <a href="${v.url}" target="_blank" style="color: var(--accent-cyan); text-decoration: none; font-size: 0.78rem;" title="Открыть на wvids.com">
+                            wvids.com ↗
+                        </a>
+                    </div>
+
+                    <div class="popular-card-actions">
+                        <button class="btn btn-primary btn-sm" onclick="openQuickCommentModal('${v.fid}')" style="flex: 1; justify-content: center; font-size: 0.8rem; padding: 0.35rem 0.6rem; background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); border: none;">
+                            <span>💬</span> Комментировать
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    grid.innerHTML = html;
+    updateBatchTargetScope();
+}
+
+// --- Toggle Checkbox Selection ---
+window.togglePopularSelect = function(fid) {
+    if (selectedPopularFids.has(fid)) {
+        selectedPopularFids.delete(fid);
+    } else {
+        selectedPopularFids.add(fid);
+    }
+
+    const card = document.getElementById(`pop-card-${fid}`);
+    const check = document.getElementById(`check-pop-${fid}`);
+    if (card) {
+        if (selectedPopularFids.has(fid)) card.classList.add("selected");
+        else card.classList.remove("selected");
+    }
+    if (check) {
+        check.checked = selectedPopularFids.has(fid);
+    }
+
+    updateSelectedCounters();
+};
+
+window.toggleSelectAllPopular = function(checked) {
+    popularVideos.forEach(v => {
+        if (checked) selectedPopularFids.add(v.fid);
+        else selectedPopularFids.delete(v.fid);
+
+        const card = document.getElementById(`pop-card-${v.fid}`);
+        const check = document.getElementById(`check-pop-${v.fid}`);
+        if (card) {
+            if (checked) card.classList.add("selected");
+            else card.classList.remove("selected");
+        }
+        if (check) check.checked = checked;
+    });
+
+    updateSelectedCounters();
+};
+
+function updateSelectedCounters() {
+    const count = selectedPopularFids.size;
+    const statSel = document.getElementById("statPopularSelected");
+    const scopeSel = document.getElementById("scopeSelectedCount");
+    const btnSel = document.getElementById("btnSelectedCount");
+    const allCheck = document.getElementById("selectAllPopularCheck");
+
+    if (statSel) statSel.textContent = count;
+    if (scopeSel) scopeSel.textContent = count;
+    if (btnSel) btnSel.textContent = count;
+    if (allCheck) {
+        allCheck.checked = (popularVideos.length > 0 && count === popularVideos.length);
+    }
+}
+
+window.goToBatchWithSelected = function() {
+    if (selectedPopularFids.size === 0) {
+        showToast("Сначала выберите хотя бы одно видео галочкой", "warning");
+        return;
+    }
+    switchPopularSubtab("batch");
+    const selRadio = document.querySelector('input[name="batchPopularTarget"][value="selected"]');
+    if (selRadio) {
+        selRadio.checked = true;
+        updateBatchTargetScope();
+    }
+};
+
+// --- Search / Filter Popular Videos ---
+window.filterPopularVideos = function() {
+    const input = document.getElementById("popularSearchInput");
+    if (!input) return;
+    const q = input.value.toLowerCase().trim();
+
+    popularVideos.forEach(v => {
+        const card = document.getElementById(`pop-card-${v.fid}`);
+        if (!card) return;
+        const matches = (v.title && v.title.toLowerCase().includes(q)) ||
+                        (v.fid && v.fid.toLowerCase().includes(q)) ||
+                        (v.slug && v.slug.toLowerCase().includes(q)) ||
+                        (v.uid && v.uid.toString().includes(q));
+        card.style.display = matches ? "flex" : "none";
+    });
+};
+
+// --- Quick Comment Modal ---
+window.openQuickCommentModal = async function(fid) {
+    const video = popularVideos.find(v => v.fid === fid) || {
+        fid: fid,
+        title: `Video #${fid}`,
+        url: `https://wvids.com/v/${fid}`,
+        uid: "N/A",
+        thumbnail: ""
+    };
+    currentQuickCommentVideo = video;
+
+    const modal = document.getElementById("quickCommentModal");
+    const titleElem = document.getElementById("quickCommentTitle");
+    const fidElem = document.getElementById("quickCommentFid");
+    const uidElem = document.getElementById("quickCommentUid");
+    const linkElem = document.getElementById("quickCommentLink");
+    const thumbElem = document.getElementById("quickCommentThumb");
+    const textInput = document.getElementById("quickCommentTextInput");
+
+    if (titleElem) titleElem.textContent = video.title || `Video #${fid}`;
+    if (fidElem) fidElem.textContent = fid;
+    if (uidElem) uidElem.textContent = video.uid || "N/A";
+    if (linkElem) linkElem.href = video.url || `https://wvids.com/v/${fid}`;
+    if (thumbElem) {
+        thumbElem.src = video.thumbnail || "/images/image-blank.gif";
+        thumbElem.onerror = () => { thumbElem.src = "/images/image-blank.gif"; };
+    }
+    if (textInput) {
+        textInput.value = "";
+    }
+
+    // Populate accounts selector
+    await loadAccountsForPopular();
+    const select = document.getElementById("quickCommentAccountSelect");
+    if (select) {
+        select.innerHTML = "";
+        cachedAccountsForPopular.forEach(acc => {
+            const opt = document.createElement("option");
+            opt.value = acc.id;
+            opt.textContent = `@${acc.username || acc.name} (UID: ${acc.uid})`;
+            if (acc.is_active) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }
+
+    // Reset existing comments accordion
+    const list = document.getElementById("quickCommentExistingList");
+    const countElem = document.getElementById("quickCommentExistingCount");
+    if (list) {
+        list.style.display = "none";
+        list.innerHTML = `<div style="color: var(--text-muted); font-style: italic;">Загрузка комментариев...</div>`;
+    }
+    if (countElem) countElem.textContent = "0";
+
+    // Load comments in background
+    fetchExistingCommentsForModal(fid);
+
+    if (modal) modal.style.display = "flex";
+};
+
+window.closeQuickCommentModal = function() {
+    const modal = document.getElementById("quickCommentModal");
+    if (modal) modal.style.display = "none";
+    currentQuickCommentVideo = null;
+};
+
+async function fetchExistingCommentsForModal(fid) {
+    try {
+        const res = await fetch(`/api/popular/comments/${fid}`);
+        const data = await res.json();
+        const list = document.getElementById("quickCommentExistingList");
+        const countElem = document.getElementById("quickCommentExistingCount");
+
+        if (data.success) {
+            const comments = data.comments || [];
+            if (countElem) countElem.textContent = comments.length;
+
+            if (list) {
+                if (comments.length === 0) {
+                    list.innerHTML = `<div style="color: var(--text-muted); font-style: italic;">На этом видео еще нет комментариев. Будьте первыми!</div>`;
+                } else {
+                    let cHtml = "";
+                    comments.forEach(c => {
+                        cHtml += `
+                            <div style="border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.35rem;">
+                                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.15rem;">
+                                    <strong style="color: var(--accent-cyan);">@${escapeHtml(c.author || 'User')}</strong>
+                                    <span>${escapeHtml(c.time || '')}</span>
+                                </div>
+                                <div style="color: #e2e8f0; font-size: 0.82rem;">${escapeHtml(c.text || '')}</div>
+                            </div>
+                        `;
+                    });
+                    list.innerHTML = cHtml;
+                }
+            }
+        }
+    } catch (e) {
+        console.error("fetchExistingComments error:", e);
+    }
+}
+
+window.toggleQuickCommentExisting = function() {
+    const list = document.getElementById("quickCommentExistingList");
+    const arrow = document.getElementById("quickCommentExistingArrow");
+    if (!list) return;
+
+    if (list.style.display === "none" || !list.style.display) {
+        list.style.display = "flex";
+        if (arrow) arrow.textContent = "▼";
+    } else {
+        list.style.display = "none";
+        if (arrow) arrow.textContent = "▶";
+    }
+};
+
+window.generateQuickSpintax = function() {
+    const input = document.getElementById("quickCommentTextInput");
+    if (!input) return;
+    const presets = [
+        "{Классное|Супер|Огонь|Отличное} видео! 🔥",
+        "Очень крутой контент, {лайк|подписка|зачёт} 👍",
+        "{Вау|Шикарно}, спасибо за ролик! ✨",
+        "Топовое видео, продолжай в том же духе! 🚀",
+        "{Красота|Кайф|Мощь}, заценил 👌"
+    ];
+    const picked = presets[Math.floor(Math.random() * presets.length)];
+    input.value = parseLocalSpintax(picked);
+};
+
+window.submitQuickComment = async function() {
+    if (!currentQuickCommentVideo) return;
+    const textInput = document.getElementById("quickCommentTextInput");
+    const accountSelect = document.getElementById("quickCommentAccountSelect");
+    const btn = document.getElementById("btnSubmitQuickComment");
+
+    const text = textInput ? textInput.value.trim() : "";
+    if (!text) {
+        showToast("Введите текст комментария перед отправкой", "warning");
+        return;
+    }
+
+    const accountId = accountSelect ? parseInt(accountSelect.value) : null;
+    const fid = currentQuickCommentVideo.fid;
+    const title = currentQuickCommentVideo.title || `Video #${fid}`;
+    const url = currentQuickCommentVideo.url || "";
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<span>⏳</span> Публикация...`;
+    }
+
+    try {
+        const res = await fetch("/api/popular/comment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                fid: fid,
+                text: text,
+                video_title: title,
+                video_url: url,
+                account_id: accountId
+            })
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+            showToast(`✅ Комментарий на видео #${fid} успешно опубликован!`, "success");
+            closeQuickCommentModal();
+            loadPopularCommentHistory();
+        } else {
+            const err = data.error || data.detail || "Ошибка сервера";
+            showToast(`❌ Ошибка: ${err}`, "error");
+            loadPopularCommentHistory();
+        }
+    } catch (e) {
+        showToast("Ошибка сети при отправке: " + e.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `<span>💬</span> Опубликовать комментарий`;
+        }
+    }
+};
+
+// --- Spintax Presets & Live Preview ---
+function parseLocalSpintax(text) {
+    let current = text;
+    const re = /\{([^{}]+)\}/;
+    while (re.test(current)) {
+        current = current.replace(re, (_, choices) => {
+            const opts = choices.split("|");
+            return opts[Math.floor(Math.random() * opts.length)];
+        });
+    }
+    return current.trim();
+}
+
+window.insertPopularCommentPresets = function() {
+    const textarea = document.getElementById("popularBatchTemplates");
+    if (!textarea) return;
+
+    textarea.value = [
+        "{Классное|Супер|Огонь|Отличное} видео! 🔥",
+        "Очень крутой контент, {лайк|подписка|зачёт} 👍",
+        "{Вау|Шикарно}, спасибо за ролик! ✨",
+        "Топовое видео, продолжай в том же духе! 🚀",
+        "{Красота|Кайф|Мощь}, заценил 👌",
+        "Интересный ролик! {Респект|Уважение} автору 🔥",
+        "{Круто получилось|Отличная работа}, жду продолжения!"
+    ].join("\n");
+
+    const badge = document.getElementById("templatesCountBadge");
+    if (badge) badge.textContent = "7 строк";
+    testSpintaxPreview();
+};
+
+window.testSpintaxPreview = function() {
+    const textarea = document.getElementById("popularBatchTemplates");
+    const container = document.getElementById("spintaxPreviewContainer");
+    const textElem = document.getElementById("spintaxPreviewText");
+    if (!textarea || !container || !textElem) return;
+
+    const raw = textarea.value.trim();
+    if (!raw) {
+        showToast("Сначала введите хотя бы одну строку шаблона", "info");
+        return;
+    }
+
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    const randomLine = lines[Math.floor(Math.random() * lines.length)];
+    const generated = parseLocalSpintax(randomLine);
+
+    textElem.textContent = `"${generated}"`;
+    container.style.display = "block";
+};
+
+// --- Multi-Account Rotation Loader ---
+async function loadAccountsForPopular() {
+    try {
+        const res = await fetch("/api/accounts");
+        const accounts = await res.json();
+        if (Array.isArray(accounts)) {
+            cachedAccountsForPopular = accounts;
+            renderBatchAccountsList();
+        }
+    } catch (e) {
+        console.error("loadAccountsForPopular error:", e);
+    }
+}
+
+function renderBatchAccountsList() {
+    const container = document.getElementById("popularBatchAccountsList");
+    if (!container) return;
+
+    if (!cachedAccountsForPopular || cachedAccountsForPopular.length === 0) {
+        container.innerHTML = `<div style="color: var(--text-muted); font-size: 0.8rem;">Нет добавленных аккаунтов. Добавьте их во вкладке «Куки & Аккаунты».</div>`;
+        return;
+    }
+
+    let html = "";
+    cachedAccountsForPopular.forEach(acc => {
+        const isSusp = acc.is_suspended;
+        html += `
+            <label style="display: flex; align-items: center; justify-content: space-between; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.82rem; cursor: pointer; ${isSusp ? 'opacity: 0.5;' : ''}">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <input type="checkbox" class="batch-acc-checkbox" value="${acc.id}" ${acc.is_active && !isSusp ? 'checked' : ''} ${isSusp ? 'disabled' : ''}>
+                    <span style="font-weight: 600; color: ${isSusp ? '#ef4444' : '#fff'};">@${escapeHtml(acc.username || acc.name)}</span>
+                    <span style="font-size: 0.72rem; color: var(--text-muted);">(UID: ${acc.uid})</span>
+                </div>
+                ${isSusp ? '<span style="color: #ef4444; font-size: 0.7rem; font-weight: 700;">⛔ ЗАБЛОКИРОВАН</span>' : (acc.is_active ? '<span class="brand-badge" style="font-size: 0.65rem;">АКТИВНЫЙ</span>' : '')}
+            </label>
+        `;
+    });
+    container.innerHTML = html;
+}
+
+// --- Target Scope Updates ---
+window.updateBatchTargetScope = function() {
+    const checkedRadio = document.querySelector('input[name="batchPopularTarget"]:checked');
+    const val = checkedRadio ? checkedRadio.value : 'all';
+    const queueElem = document.getElementById("batchQueueCount");
+
+    let count = 0;
+    if (val === 'all') count = popularVideos.length;
+    else if (val === 'top5') count = Math.min(5, popularVideos.length);
+    else if (val === 'top10') count = Math.min(10, popularVideos.length);
+    else if (val === 'selected') count = selectedPopularFids.size;
+
+    if (queueElem) queueElem.textContent = count;
+};
+
+// --- Batch Commenter Start & Stop ---
+window.startPopularBatchComment = async function() {
+    const targetRadio = document.querySelector('input[name="batchPopularTarget"]:checked');
+    const targetScope = targetRadio ? targetRadio.value : 'all';
+
+    let targetFids = [];
+    if (targetScope === 'all') {
+        targetFids = popularVideos.map(v => v.fid);
+    } else if (targetScope === 'top5') {
+        targetFids = popularVideos.slice(0, 5).map(v => v.fid);
+    } else if (targetScope === 'top10') {
+        targetFids = popularVideos.slice(0, 10).map(v => v.fid);
+    } else if (targetScope === 'selected') {
+        targetFids = Array.from(selectedPopularFids);
+    }
+
+    if (targetFids.length === 0) {
+        showToast("Нет видео для комментирования. Выберите видео галочками или загрузите Популярные.", "warning");
+        return;
+    }
+
+    const textarea = document.getElementById("popularBatchTemplates");
+    const templates = textarea ? textarea.value.split("\n").filter(l => l.trim().length > 0) : [];
+    if (templates.length === 0) {
+        showToast("Укажите хотя бы один шаблон комментария", "warning");
+        return;
+    }
+
+    const delayMin = parseFloat(document.getElementById("popularBatchDelayMin")?.value || 5);
+    const delayMax = parseFloat(document.getElementById("popularBatchDelayMax")?.value || 12);
+
+    // Selected accounts
+    const accountCheckboxes = document.querySelectorAll(".batch-acc-checkbox:checked");
+    const accountIds = Array.from(accountCheckboxes).map(cb => parseInt(cb.value));
+
+    const btnStart = document.getElementById("btnStartPopularBatch");
+    const btnStop = document.getElementById("btnStopPopularBatch");
+
+    if (btnStart) btnStart.disabled = true;
+
+    try {
+        const res = await fetch("/api/popular/batch-comment/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                fids: targetFids,
+                templates: templates,
+                delay_min: delayMin,
+                delay_max: delayMax,
+                account_ids: accountIds.length > 0 ? accountIds : null
+            })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            showToast(`🚀 Запущен авто-постинг для ${targetFids.length} видео!`, "success");
+            if (btnStart) btnStart.style.display = "none";
+            if (btnStop) {
+                btnStop.style.display = "inline-flex";
+                btnStop.disabled = false;
+            }
+            loadPopularBatchStatus();
+        } else {
+            showToast(data.detail || data.error || "Не удалось запустить авто-комментирование", "error");
+            if (btnStart) btnStart.disabled = false;
+        }
+    } catch (e) {
+        showToast("Ошибка запроса: " + e.message, "error");
+        if (btnStart) btnStart.disabled = false;
+    }
+};
+
+window.stopPopularBatchComment = async function() {
+    const btnStop = document.getElementById("btnStopPopularBatch");
+    if (btnStop) btnStop.disabled = true;
+
+    try {
+        const res = await fetch("/api/popular/batch-comment/stop", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("⏹️ Процесс авто-комментирования останавливается...", "info");
+        }
+    } catch (e) {
+        showToast("Ошибка при остановке: " + e.message, "error");
+    }
+};
+
+// --- Live Batch Status Poller ---
+async function loadPopularBatchStatus() {
+    try {
+        const res = await fetch("/api/popular/batch-comment/status");
+        const status = await res.json();
+
+        const btnStart = document.getElementById("btnStartPopularBatch");
+        const btnStop = document.getElementById("btnStopPopularBatch");
+        const statusTextElem = document.getElementById("popularBatchProgressStatus");
+        const percentElem = document.getElementById("popularBatchProgressPercent");
+        const barElem = document.getElementById("popularBatchProgressBar");
+        const queueElem = document.getElementById("batchQueueCount");
+        const successElem = document.getElementById("batchSuccessCount");
+        const errorElem = document.getElementById("batchErrorCount");
+        const terminal = document.getElementById("popularBatchLogsTerminal");
+        const topStatText = document.getElementById("statPopularStatusText");
+
+        if (status.is_running) {
+            if (btnStart) btnStart.style.display = "none";
+            if (btnStop) {
+                btnStop.style.display = "inline-flex";
+                btnStop.disabled = false;
+            }
+            if (topStatText) {
+                topStatText.textContent = "Работает 🚀";
+                topStatText.style.color = "var(--accent-cyan)";
+            }
+        } else {
+            if (btnStart) {
+                btnStart.style.display = "inline-flex";
+                btnStart.disabled = false;
+            }
+            if (btnStop) btnStop.style.display = "none";
+            if (topStatText) {
+                topStatText.textContent = "Ожидание";
+                topStatText.style.color = "var(--accent-amber)";
+            }
+        }
+
+        if (statusTextElem) statusTextElem.textContent = status.status_text || "Ожидание запуска";
+        if (percentElem) percentElem.textContent = `${status.percent || 0}%`;
+        if (barElem) barElem.style.width = `${status.percent || 0}%`;
+        if (queueElem && status.is_running) queueElem.textContent = status.total || 0;
+        if (successElem) successElem.textContent = status.success_count || 0;
+        if (errorElem) errorElem.textContent = status.error_count || 0;
+
+        // Terminal logs
+        if (terminal && Array.isArray(status.logs) && status.logs.length > 0) {
+            terminal.innerHTML = status.logs.map(l => `<div>${escapeHtml(l)}</div>`).join("");
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+    } catch (e) {
+        // quiet polling error
+    }
+}
+
+// --- History Table ---
+window.loadPopularCommentHistory = async function() {
+    const tbody = document.getElementById("popularHistoryTableBody");
+    const badgeCount = document.getElementById("popHistoryBadgeCount");
+    const statSuccess = document.getElementById("statPopularSuccess");
+
+    try {
+        const res = await fetch("/api/popular/history?limit=100");
+        const data = await res.json();
+
+        if (data.success && Array.isArray(data.history)) {
+            const list = data.history;
+            if (badgeCount) badgeCount.textContent = list.length;
+
+            const successTotal = list.filter(item => item.status === 'success').length;
+            if (statSuccess) statSuccess.textContent = successTotal;
+
+            if (!tbody) return;
+
+            if (list.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                            История комментариев пуста. Опубликуйте комментарий вручную или запустите авто-комментер.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            let html = "";
+            list.forEach(row => {
+                const dateStr = row.created_at ? new Date(row.created_at * 1000).toLocaleString("ru-RU", {
+                    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"
+                }) : "-";
+
+                const isSuccess = row.status === "success";
+                const badge = isSuccess
+                    ? `<span class="brand-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green);">Успешно</span>`
+                    : `<span class="brand-badge" style="background: rgba(239, 68, 68, 0.25); color: #f87171;" title="${escapeHtml(row.response_msg || 'Ошибка')}">Ошибка</span>`;
+
+                const videoLink = row.video_url || `https://wvids.com/v/${row.video_fid}`;
+
+                html += `
+                    <tr>
+                        <td style="font-size: 0.8rem; color: var(--text-muted);">${dateStr}</td>
+                        <td>
+                            <strong style="color: var(--accent-cyan); font-size: 0.85rem;">@${escapeHtml(row.account_username || 'Unknown')}</strong>
+                        </td>
+                        <td>
+                            <div style="font-weight: 600; font-size: 0.88rem; color: #fff; max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(row.video_title || '')}">
+                                ${escapeHtml(row.video_title || `Video #${row.video_fid}`)}
+                            </div>
+                            <span style="font-size: 0.72rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">FID: #${row.video_fid}</span>
+                        </td>
+                        <td style="font-size: 0.85rem; color: #e2e8f0; max-width: 320px; word-break: break-word;">
+                            "${escapeHtml(row.comment_text || '')}"
+                        </td>
+                        <td>${badge}</td>
+                        <td style="text-align: right;">
+                            <a href="${videoLink}" target="_blank" class="btn btn-secondary btn-xs" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; padding: 0.25rem 0.5rem;" title="Открыть публикацию на сайте">
+                                <span>🔗</span> Пост
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = html;
+        }
+    } catch (e) {
+        console.error("loadPopularCommentHistory error:", e);
+    }
+};
+
+window.clearPopularCommentHistory = async function() {
+    if (!confirm("Вы уверены, что хотите полностью очистить историю отправленных комментариев?")) {
+        return;
+    }
+
+    try {
+        const res = await fetch("/api/popular/history", { method: "DELETE" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("🗑️ История комментариев очищена", "success");
+            loadPopularCommentHistory();
+        }
+    } catch (e) {
+        showToast("Ошибка при очистке истории: " + e.message, "error");
+    }
+};
+

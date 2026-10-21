@@ -18,20 +18,37 @@ sys.path.insert(0, str(BASE_DIR))
 
 from backend.config import HOST, PORT
 
-def is_port_in_use(port: int, host: str = "0.0.0.0") -> bool:
+def check_port_availability(port: int, host: str = "0.0.0.0"):
+    """Returns (is_available, is_permission_error)."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
-            return False
-        except OSError:
-            return True
+            return True, False
+        except PermissionError:
+            return False, True
+        except OSError as e:
+            if getattr(e, "errno", None) in (13,):  # EACCES Permission Denied on Linux
+                return False, True
+            return False, False
 
 def find_available_port(start_port: int, host: str = "0.0.0.0") -> int:
+    available, perm_err = check_port_availability(start_port, host)
+    if available:
+        return start_port
+    if perm_err:
+        print(f" [!] ВНИМАНИЕ: Порт {start_port} требует привилегий root (sudo).")
+        print(f"     Переключение на стандартный непривилегированный порт 8080...")
+        start_port = 8080
+        available, _ = check_port_availability(start_port, host)
+        if available:
+            return start_port
     port = start_port
-    while is_port_in_use(port, host):
+    while True:
+        available, _ = check_port_availability(port, host)
+        if available:
+            return port
         port += 1
-    return port
 
 def main():
     selected_port = find_available_port(PORT, HOST)

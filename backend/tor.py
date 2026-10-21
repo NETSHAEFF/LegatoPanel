@@ -45,7 +45,10 @@ def kill_process_tree(pid: int) -> bool:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            os.kill(pid, 15)
+            try:
+                os.killpg(os.getpgid(pid), 15)
+            except Exception:
+                os.kill(pid, 15)
         return True
     except Exception:
         return False
@@ -61,44 +64,51 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
 
 def find_tor_binary() -> Optional[Path]:
     """
-    Locates tor binary across known paths, LocalAppData, Desktop Tor Browser, or system PATH.
+    Locates tor binary across system PATH, known paths, LocalAppData, or Desktop Tor Browser.
     """
-    bin_name = "tor.exe" if os.name == "nt" else "tor"
-    candidates: List[Path] = []
-    # 1. LocalAppData Programs (Windows)
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    if local_app_data:
-        candidates.append(Path(local_app_data) / "Programs" / "Tor" / "tor.exe")
-        candidates.append(Path(local_app_data) / "Programs" / "Python" / "Python312" / "Scripts" / "tor.exe")
-
-    # 2. Project local tor directory
-    base_dir = Path(__file__).resolve().parent.parent
-    candidates.append(base_dir / "tor" / bin_name)
-
-    # 3. Desktop Tor Browser
-    desktop_candidates = [
-        Path("C:/Users/Administrator/Desktop/Tor Browser/Browser/TorBrowser/Tor/tor.exe"),
-        Path.home() / "Desktop" / "Tor Browser" / "Browser" / "TorBrowser" / "Tor" / "tor.exe"
-    ]
-    candidates.extend(desktop_candidates)
-
-    # 4. Standard Program Files (Windows) / Standard Linux Paths
-    candidates.extend([
-        Path("C:/Program Files/Tor/tor.exe"),
-        Path("C:/Program Files (x86)/Tor/tor.exe"),
-        Path("/usr/bin/tor"),
-        Path("/usr/local/bin/tor"),
-        Path("/usr/sbin/tor")
-    ])
-
-    for c in candidates:
-        if c.exists() and c.is_file():
-            return c
-
-    # 5. Which tor in PATH
+    # 1. System PATH first (standard on Ubuntu/Linux: /usr/bin/tor)
     w = shutil.which("tor")
     if w:
         return Path(w)
+
+    bin_name = "tor.exe" if os.name == "nt" else "tor"
+    candidates: List[Path] = []
+
+    # 2. Project local tor directory
+    base_dir = Path(__file__).resolve().parent.parent
+    candidates.extend([
+        base_dir / "tor" / bin_name,
+        base_dir / "bin" / bin_name,
+        Path("/usr/bin/tor"),
+        Path("/usr/local/bin/tor"),
+        Path("/usr/sbin/tor"),
+        Path("/bin/tor"),
+        Path.home() / ".local" / "bin" / "tor",
+    ])
+
+    # 3. Windows-specific candidate paths
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            candidates.append(Path(local_app_data) / "Programs" / "Tor" / "tor.exe")
+            candidates.append(Path(local_app_data) / "Programs" / "Python" / "Python312" / "Scripts" / "tor.exe")
+
+        desktop_candidates = [
+            Path("C:/Users/Administrator/Desktop/Tor Browser/Browser/TorBrowser/Tor/tor.exe"),
+            Path.home() / "Desktop" / "Tor Browser" / "Browser" / "TorBrowser" / "Tor" / "tor.exe",
+            Path("C:/Program Files/Tor/tor.exe"),
+            Path("C:/Program Files (x86)/Tor/tor.exe"),
+        ]
+        candidates.extend(desktop_candidates)
+
+    for c in candidates:
+        if c.exists() and c.is_file():
+            if os.name != "nt":
+                try:
+                    os.chmod(c, 0o755)
+                except Exception:
+                    pass
+            return c
 
     return None
 
@@ -113,29 +123,29 @@ def setup_standalone_tor_env(target_port: int = 9050) -> Tuple[Optional[Path], O
 
     bin_name = "tor.exe" if os.name == "nt" else "tor"
 
-    # Preferred base dir for standalone Tor
+    # Base dir for standalone Tor configuration and data
     local_app_data = os.environ.get("LOCALAPPDATA", "")
-    tor_dir = (Path(local_app_data) / "Programs" / "Tor") if local_app_data else (Path(__file__).resolve().parent.parent / "tor")
+    tor_dir = (Path(local_app_data) / "Programs" / "Tor") if (local_app_data and os.name == "nt") else (Path(__file__).resolve().parent.parent / "tor")
     tor_dir.mkdir(parents=True, exist_ok=True)
 
-    # Ensure tor binary in tor_dir
-    local_tor_exe = tor_dir / bin_name
-    if not local_tor_exe.exists() and tor_exe.exists():
-        try:
-            shutil.copy2(str(tor_exe), str(local_tor_exe))
+    # On Windows: optionally copy binary into local tor_dir
+    if os.name == "nt":
+        local_tor_exe = tor_dir / bin_name
+        if not local_tor_exe.exists() and tor_exe.exists():
+            try:
+                shutil.copy2(str(tor_exe), str(local_tor_exe))
+                tor_exe = local_tor_exe
+            except Exception:
+                pass
+        elif local_tor_exe.exists():
             tor_exe = local_tor_exe
-        except Exception:
-            pass
-    elif local_tor_exe.exists():
-        tor_exe = local_tor_exe
 
-    # Locate PluggableTransports and GeoIP
     source_tor_dir = tor_exe.parent
-    desktop_tor = Path("C:/Users/Administrator/Desktop/Tor Browser/Browser/TorBrowser")
+    desktop_tor = Path("C:/Users/Administrator/Desktop/Tor Browser/Browser/TorBrowser") if os.name == "nt" else Path("/nonexistent")
     
-    # PluggableTransports
+    # PluggableTransports directory (Windows: copy from Tor Browser if present)
     pt_dir = tor_dir / "PluggableTransports"
-    if not pt_dir.exists():
+    if os.name == "nt" and not pt_dir.exists():
         for candidate_pt in [source_tor_dir / "PluggableTransports", desktop_tor / "Tor" / "PluggableTransports"]:
             if candidate_pt.exists():
                 try:
@@ -144,31 +154,76 @@ def setup_standalone_tor_env(target_port: int = 9050) -> Tuple[Optional[Path], O
                 except Exception:
                     pass
 
-    # GeoIP
-    for gf in ["geoip", "geoip6"]:
-        dst_g = tor_dir / gf
-        if not dst_g.exists():
-            for src_g in [source_tor_dir / gf, desktop_tor / "Data" / "Tor" / gf]:
-                if src_g.exists():
+    # GeoIP resolution (Ubuntu standard /usr/share/tor/geoip, or local project/TorBrowser)
+    geoip_file = None
+    geoip6_file = None
+    for cand in [
+        tor_dir / "geoip",
+        source_tor_dir / "geoip",
+        desktop_tor / "Data" / "Tor" / "geoip",
+        Path("/usr/share/tor/geoip"),
+        Path("/var/lib/tor/geoip"),
+        Path("/usr/local/share/tor/geoip"),
+    ]:
+        if cand.is_file():
+            geoip_file = cand
+            break
+
+    for cand in [
+        tor_dir / "geoip6",
+        source_tor_dir / "geoip6",
+        desktop_tor / "Data" / "Tor" / "geoip6",
+        Path("/usr/share/tor/geoip6"),
+        Path("/var/lib/tor/geoip6"),
+        Path("/usr/local/share/tor/geoip6"),
+    ]:
+        if cand.is_file():
+            geoip6_file = cand
+            break
+
+    geoip_line = f"GeoIPFile {str(geoip_file).replace('\\', '/')}" if geoip_file else ""
+    geoip6_line = f"GeoIPv6File {str(geoip6_file).replace('\\', '/')}" if geoip6_file else ""
+
+    # Pluggable Transports line (obfs4proxy / lyrebird)
+    pt_line = ""
+    lyre_candidates = [
+        pt_dir / ("lyrebird.exe" if os.name == "nt" else "lyrebird"),
+        Path("/usr/bin/lyrebird"),
+        Path("/usr/local/bin/lyrebird"),
+    ]
+    w_lyre = shutil.which("lyrebird")
+    if w_lyre:
+        lyre_candidates.insert(0, Path(w_lyre))
+
+    obfs4_candidates = [
+        pt_dir / ("obfs4proxy.exe" if os.name == "nt" else "obfs4proxy"),
+        Path("/usr/bin/obfs4proxy"),
+        Path("/usr/local/bin/obfs4proxy"),
+    ]
+    w_obfs = shutil.which("obfs4proxy")
+    if w_obfs:
+        obfs4_candidates.insert(0, Path(w_obfs))
+
+    for cand in lyre_candidates:
+        if cand.is_file():
+            if os.name != "nt":
+                try:
+                    os.chmod(cand, 0o755)
+                except Exception:
+                    pass
+            pt_line = f"ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec {str(cand).replace('\\', '/')}"
+            break
+
+    if not pt_line:
+        for cand in obfs4_candidates:
+            if cand.is_file():
+                if os.name != "nt":
                     try:
-                        shutil.copy2(str(src_g), str(dst_g))
-                        break
+                        os.chmod(cand, 0o755)
                     except Exception:
                         pass
-
-    # Data directory
-    data_dir = tor_dir / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    # Lyrebird binary
-    lyrebird_exe = tor_dir / "PluggableTransports" / "lyrebird.exe"
-    pt_line = ""
-    if lyrebird_exe.exists():
-        lyre_path = str(lyrebird_exe).replace("\\", "/")
-        pt_line = f"ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec {lyre_path}"
-
-    geoip_line = f"GeoIPFile {str(tor_dir / 'geoip').replace('\\', '/')}" if (tor_dir / "geoip").exists() else ""
-    geoip6_line = f"GeoIPv6File {str(tor_dir / 'geoip6').replace('\\', '/')}" if (tor_dir / "geoip6").exists() else ""
+                pt_line = f"ClientTransportPlugin obfs4 exec {str(cand).replace('\\', '/')}"
+                break
 
     # Geo Exit Nodes Configuration ({us}, {de}, {ru}, etc.)
     cfg = get_tor_config()
@@ -182,6 +237,17 @@ def setup_standalone_tor_env(target_port: int = 9050) -> Tuple[Optional[Path], O
             formatted = ",".join(f"{{{c}}}" for c in codes)
             exit_nodes_line = f"ExitNodes {formatted}\nStrictNodes {'1' if strict_nodes else '0'}"
 
+    # Only enable obfs4 bridges if a pluggable transport plugin is installed!
+    bridges_config = ""
+    if pt_line:
+        bridges_config = """Bridge obfs4 51.89.228.250:21668 BA8BD67D8898CF378D4F73821DEB5657F4BB98DF cert=bEpLLgOwJ9fOJbeHb5r+ronUF2ck5nRd0Jl3zuy7rLoUp732QK2p/CUHjTAfBPCGfcVtSA iat-mode=0
+Bridge obfs4 51.89.231.85:24526 A44162645CEAA39C7106C49A3F36FD99FF8D8A00 cert=cVNRBh1enpvEGxA0ouu568EDFhWPl9taldydYgiJk77OX4MzoYIRz3qx4q7yHL5bRN60Gg iat-mode=0
+UseBridges 1"""
+
+    # Data directory
+    data_dir = tor_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
     log_file = str(tor_dir / "tor.log").replace('\\', '/')
     torrc_content = f"""# Standalone Headless Tor Config for Wvids Studio Pro
 SocksPort {target_port}
@@ -190,15 +256,14 @@ DataDirectory {str(data_dir).replace('\\', '/')}
 {geoip6_line}
 {exit_nodes_line}
 {pt_line}
-Bridge obfs4 51.89.228.250:21668 BA8BD67D8898CF378D4F73821DEB5657F4BB98DF cert=bEpLLgOwJ9fOJbeHb5r+ronUF2ck5nRd0Jl3zuy7rLoUp732QK2p/CUHjTAfBPCGfcVtSA iat-mode=0
-Bridge obfs4 51.89.231.85:24526 A44162645CEAA39C7106C49A3F36FD99FF8D8A00 cert=cVNRBh1enpvEGxA0ouu568EDFhWPl9taldydYgiJk77OX4MzoYIRz3qx4q7yHL5bRN60Gg iat-mode=0
-UseBridges 1
+{bridges_config}
 DisableNetwork 0
 AvoidDiskWrites 1
 Log notice file {log_file}
 """
+    torrc_lines = [line for line in torrc_content.splitlines() if line.strip()]
     torrc_path = tor_dir / "torrc"
-    torrc_path.write_text(torrc_content.strip(), encoding="utf-8")
+    torrc_path.write_text("\n".join(torrc_lines) + "\n", encoding="utf-8")
 
     return tor_exe, torrc_path
 
@@ -276,29 +341,30 @@ class HeadlessTorManager:
         # 2. Setup standalone env
         tor_exe, torrc_path = setup_standalone_tor_env(target_port=port)
         if not tor_exe or not torrc_path:
-            err = "Не найден исполняемый файл tor.exe для автономного запуска"
+            err = "Не найден исполняемый файл Tor (tor/tor.exe) для автономного запуска. На Ubuntu установите: sudo apt install -y tor"
             add_log("ERROR", err)
             return {"success": False, "error": err}
 
         cmd = [str(tor_exe), "-f", str(torrc_path)]
-        creationflags = 0
+        popen_kwargs: Dict[str, Any] = {
+            "cwd": str(tor_exe.parent),
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+            "close_fds": True,
+        }
         if os.name == "nt":
             # Fully detached background process on Windows so it survives CLI termination
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             CREATE_NO_WINDOW = 0x08000000
-            creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            popen_kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        else:
+            # Fully detached background process on Linux/POSIX
+            popen_kwargs["start_new_session"] = True
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(tor_exe.parent),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                close_fds=True,
-                creationflags=creationflags
-            )
+            proc = subprocess.Popen(cmd, **popen_kwargs)
             self._process = proc
             self._binary_path = tor_exe
 
