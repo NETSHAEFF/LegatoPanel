@@ -413,6 +413,57 @@ async def cmd_download_popular(args):
     print(f"    📁 Папка с видео:         {f_path}")
     print("=" * 65)
 
+async def cmd_autocomment(args):
+    """CLI Auto-Commenter for new videos."""
+    from backend.auto_commenter import auto_commenter
+
+    settings = {}
+    if args.interval:
+        settings["interval_minutes"] = args.interval
+    if args.min_views is not None:
+        settings["min_views"] = args.min_views
+    if args.max_views is not None:
+        settings["max_views"] = args.max_views
+    if args.limit:
+        settings["daily_limit"] = args.limit
+    if args.text:
+        settings["comment_templates"] = [args.text]
+
+    auto_commenter.update_settings(settings)
+
+    if args.test_fid:
+        print(f"\n[?] Тестовая отправка комментария на FID {args.test_fid}...")
+        res = await auto_commenter.test_single_comment(args.test_fid, text=args.text)
+        if res.get("success"):
+            print(f"[+] ✅ Успешно: '{res.get('msg')}'")
+        else:
+            print(f"[-] ❌ Ошибка: {res.get('error')}")
+        return
+
+    print("\n" + "=" * 65)
+    print(" 💬 WVids Auto-Commenter (Раздел 'Новое')")
+    print(f"    Интервал:      {auto_commenter.interval_seconds} сек. ({auto_commenter.interval_seconds / 60:.1f} мин.)")
+    print(f"    Мин. просмотры:{auto_commenter.min_views}")
+    print(f"    Макс.просмотры:{auto_commenter.max_views or 'без ограничений'}")
+    print(f"    Дневной лимит: {auto_commenter.daily_limit}")
+    print(f"    Шаблонов:      {len(auto_commenter.comment_templates)}")
+    print("=" * 65)
+
+    res = await auto_commenter.start()
+    if not res.get("success"):
+        print(f"[-] Ошибка запуска: {res.get('error') or res.get('message')}")
+        return
+
+    print("[+] Фоновый автокомментинг запущен. Нажмите CTRL+C для выхода.\n")
+    try:
+        while auto_commenter.is_running:
+            await asyncio.sleep(2)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n[!] Остановка по требованию пользователя...")
+        await auto_commenter.stop()
+
+    print("[+] Готово.")
+
 def main():
     parser = argparse.ArgumentParser(description="Wvids Studio CLI Automation Tool")
     subparsers = parser.add_subparsers(dest="command", help="Команда для выполнения")
@@ -472,6 +523,19 @@ def main():
     p_pop.add_argument("--limit", "-l", type=int, default=0, help="Максимальное количество видео для скачивания (0 = все найденные)")
     p_pop.add_argument("--scan-only", action="store_true", help="Только показать список найденных видео без скачивания")
 
+    # Auto-Commenter
+    p_com = subparsers.add_parser(
+        "autocomment",
+        aliases=["comment"],
+        help="Автокомментинг раздела 'Новое' с рандомным выбором видео по просмотрам и шаблонами"
+    )
+    p_com.add_argument("--interval", "-i", type=float, default=3.0, help="Интервал между комментариями в минутах (по умолчанию: 3.0)")
+    p_com.add_argument("--min-views", "-m", type=int, default=50, help="Мин. просмотры для комментирования (по умолчанию: 50)")
+    p_com.add_argument("--max-views", "-M", type=int, default=0, help="Макс. просмотры (0 = без ограничений)")
+    p_com.add_argument("--limit", "-l", type=int, default=30, help="Дневной лимит комментариев (по умолчанию: 30)")
+    p_com.add_argument("--text", "-t", default="", help="Текст комментария или шаблон {A|B|C}")
+    p_com.add_argument("--test-fid", default="", help="Оставить тестовый комментарий на конкретный FID")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -495,6 +559,8 @@ def main():
         asyncio.run(cmd_redact_all(args))
     elif args.command in ("download-popular", "popular"):
         asyncio.run(cmd_download_popular(args))
+    elif args.command in ("autocomment", "comment"):
+        asyncio.run(cmd_autocomment(args))
 
 if __name__ == "__main__":
     main()
