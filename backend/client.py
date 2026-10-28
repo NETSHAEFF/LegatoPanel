@@ -3,6 +3,8 @@ import json
 import time
 import base64
 import os
+import asyncio
+from pathlib import Path
 from urllib.parse import quote
 from typing import Dict, Any, Optional, Tuple, List
 from curl_cffi import requests
@@ -17,6 +19,7 @@ from .config import (
     URL_LOGIN_API,
     URL_CHART_UID,
     URL_REDACT_CONTENT,
+    URL_FETCH_CONTENT,
     DEFAULT_HOST,
     DEFAULT_FINGERPRINT,
     UPLOAD_HOST_FALLBACK
@@ -42,24 +45,39 @@ def check_response_for_suspension(text: str, status_code: int = 200) -> Tuple[bo
     - Text phrases: 'account suspended', 'account is suspended', 'your account has been suspended', 'аккаунт заблокирован', 'account blocked'
     - Redirection to /suspended
     - 403 status with suspension notice
+    NOTE: On wvids.com, <div class="status-message" style="display: none;"> contains "Account suspended"
+    as part of the base template for all normal accounts. It must be ignored if hidden.
     """
     if not text:
         return False, ""
 
     t_lower = text.lower()
+
+    # Direct JSON/API error fields
+    if '"account suspended"' in t_lower or '"account_suspended"' in t_lower:
+        return True, "Account suspended"
+
+    # Strip hidden template elements if HTML
+    clean_text = re.sub(
+        r'<div[^>]*class=["\'][^"\']*status-message[^"\']*["\'][^>]*style=["\'][^"\']*display:\s*none[\s\S]*?</div>\s*</div>\s*</div>',
+        '',
+        text,
+        flags=re.IGNORECASE
+    )
+    clean_lower = clean_text.lower()
+
     suspension_markers = [
-        "account suspended",
-        "account is suspended",
         "your account has been suspended",
         "this account is suspended",
-        "account suspended.",
+        "account is suspended",
         "аккаунт заблокирован",
         "аккаунт приостановлен",
         "account blocked",
-        "/suspended"
+        "/suspended",
+        "account suspended"
     ]
     for marker in suspension_markers:
-        if marker in t_lower:
+        if marker in clean_lower:
             return True, "Account suspended"
 
     if status_code == 403 and any(k in t_lower for k in ["suspend", "block", "bann"]):
@@ -137,9 +155,11 @@ class WvidsClient:
             # Set default headers
             headers = get_browser_headers(self.fingerprint)
             self._session.headers.update(headers)
-            # Add cookies
+            # Add cookies to both wvids.com and default jar
             for k, v in self.cookies.items():
                 self._session.cookies.set(k, v, domain="wvids.com")
+                self._session.cookies.set(k, v, domain=".wvids.com")
+                self._session.cookies.set(k, v)
 
         return self._session
 
@@ -155,100 +175,242 @@ class WvidsClient:
         self.cookies.update(new_cookies)
         self.reset_session()
 
-    async def verify_session(self) -> Dict[str, Any]:
+    async def verify_session(self, fallback_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Verifies whether current cookies are logged in,
-        and extracts userpageid (uid) and username.
+        and extracts userpageid (uid) and username with multi-layer fallback.
         """
         session = self.get_session()
-        await human_jitter(0.2, 0.5)
+        await human_jitter(0.2, 0.4)
 
-        try:
-            # 1. First probe wvids.com/settings
-            res = session.get(URL_SETTINGS, timeout=15)
-            html = res.text
+        if not self.cookies:
+            return {
+                "valid": False,
+                "uid": None,
+                "username": None,
+                "error": "Введенные cookies пусты. Вставьте строку cookie или JSON."
+            }
 
-            is_susp, susp_reason = check_response_for_suspension(html, res.status_code)
-            if is_susp:
-                add_log("ERROR", f"🚨 Session verification: Аккаунт заблокирован на wvids.com ({susp_reason})")
-                return {
-                    "valid": False,
-                    "is_suspended": True,
-                    "error": susp_reason,
-                    "status_code": res.status_code
-                }
+        candidate_uid = None
+        if "auth_user_id" in self.cookies:
+            clean_str = re.sub(r"\D", "", str(self.cookies["auth_user_id"]))
+            if clean_str:
+                candidate_uid = int(clean_str)
 
-            # Look for uid in script: let userpageid = 3195151; or uid = 3195151;
-            uid_match = re.search(r'(?:userpageid|uid)\s*=\s*(\d+)', html)
-            uid = int(uid_match.group(1)) if uid_match else None
+        uid: Optional[int] = None
+        username: Optional[str] = None
+        app_token: Optional[str] = None
+        jwt_uid_null = False
 
-            # Look for username in <title>@username</title> or .headerUser__login or FooterTop-Login
-            username = None
-            title_match = re.search(r'<title>@?([^<]+)</title>', html)
-            if title_match and title_match.group(1).strip() and title_match.group(1).strip() != "@":
-                username = title_match.group(1).strip()
+        # Attempt verification with automatic Tor recovery if circuit is blocked
+        for attempt in range(2):
+            try:
+                # 1. Primary probe: URL_SHARE (https://wvids.com/share)
+                # wvids.com exposes window.config with apiKey (JWT containing uid) and username on /share
+                res_share = session.get(URL_SHARE, timeout=15)
+                html_share = res_share.text
 
-            login_match = re.search(r'class=["\']headerUser__login["\'][^>]*>\s*([^<\s]+)\s*<', html)
-            if login_match:
-                username = login_match.group(1).strip()
-
-            footer_login = re.search(r'class=["\'][^"\']*FooterTop-Login[^"\']*["\'][^>]*>\s*([^<\s]+)\s*<', html)
-            if footer_login:
-                username = footer_login.group(1).strip()
-
-            # If not found on /settings, try main page
-            if not uid or not username:
-                res_main = session.get(URL_MAIN, timeout=15)
-                html_main = res_main.text
-                is_susp, susp_reason = check_response_for_suspension(html_main, res_main.status_code)
+                is_susp, susp_reason = check_response_for_suspension(html_share, res_share.status_code)
                 if is_susp:
                     add_log("ERROR", f"🚨 Session verification: Аккаунт заблокирован на wvids.com ({susp_reason})")
                     return {
                         "valid": False,
                         "is_suspended": True,
                         "error": susp_reason,
-                        "status_code": res_main.status_code
+                        "status_code": res_share.status_code
                     }
+
+                if res_share.status_code == 200:
+                    cfg_match = re.search(r'window\.config\s*=\s*window\.config\s*\|\|\s*({[\s\S]*?});', html_share)
+                    if cfg_match:
+                        raw_cfg = cfg_match.group(1)
+                        # Extract username
+                        un_match = re.search(r'username:\s*["\']([^"\']+)["\']', raw_cfg)
+                        if un_match and un_match.group(1).strip():
+                            username = un_match.group(1).strip()
+
+                        # Extract apiKey and decode JWT
+                        k_match = re.search(r'apiKey:\s*["\']([^"\']+)["\']', raw_cfg)
+                        if k_match:
+                            jwt_payload = self._decode_jwt_payload(k_match.group(1))
+                            if jwt_payload:
+                                if jwt_payload.get("uid") is not None:
+                                    uid = int(jwt_payload["uid"])
+                                else:
+                                    jwt_uid_null = True
+
+                    # Also check HTML tags for username
+                    if not username:
+                        footer_login = re.search(r'class=["\'][^"\']*FooterTop-Login[^"\']*["\'][^>]*>\s*([^<\s]+)\s*<', html_share)
+                        if footer_login:
+                            cand = footer_login.group(1).strip()
+                            if cand and cand.lower() not in ["login", "вход", "войти", "share"]:
+                                username = cand
+
+                    if not username:
+                        login_match = re.search(r'class=["\']headerUser__login["\'][^>]*>\s*([^<\s]+)\s*<', html_share)
+                        if login_match:
+                            username = login_match.group(1).strip()
+
+                # 2. Secondary probe: URL_SETTINGS (https://wvids.com/settings)
+                res_settings = session.get(URL_SETTINGS, timeout=15)
+                html_settings = res_settings.text
+
+                is_susp, susp_reason = check_response_for_suspension(html_settings, res_settings.status_code)
+                if is_susp:
+                    add_log("ERROR", f"🚨 Session verification: Аккаунт заблокирован на wvids.com ({susp_reason})")
+                    return {
+                        "valid": False,
+                        "is_suspended": True,
+                        "error": susp_reason,
+                        "status_code": res_settings.status_code
+                    }
+
+                if res_settings.status_code == 200:
+                    if not uid:
+                        uid_match = re.search(r'(?:userpageid|uid)\s*=\s*(\d+)', html_settings)
+                        if uid_match:
+                            uid = int(uid_match.group(1))
+
+                    if not username:
+                        # Must strictly require @ and exclude known page title names
+                        title_match = re.search(r'<title>@([a-zA-Z0-9_\-\.]+)</title>', html_settings)
+                        if title_match:
+                            cand = title_match.group(1).strip()
+                            if cand and cand.lower() not in ["404 not found", "wvids", "share", "settings", "just a moment..."]:
+                                username = cand
+
+                    if not username:
+                        login_match = re.search(r'class=["\']headerUser__login["\'][^>]*>\s*([^<\s]+)\s*<', html_settings)
+                        if login_match:
+                            username = login_match.group(1).strip()
+
+                # 3. Tertiary probe: URL_UPLOAD_TOKEN (https://wvids.com/api/upload_token.php)
                 if not uid:
-                    m = re.search(r'(?:userpageid|uid)\s*=\s*(\d+)', html_main)
-                    if m: uid = int(m.group(1))
-                if not username:
-                    m = re.search(r'class=["\']headerUser__login["\'][^>]*>\s*([^<\s]+)\s*<', html_main)
-                    if m: username = m.group(1).strip()
-                    m2 = re.search(r'href=["\'][^"\']*/@([a-zA-Z0-9_\-]+)["\']', html_main)
-                    if m2 and not username:
-                        username = m2.group(1).strip()
+                    try:
+                        res_token = session.post(
+                            URL_UPLOAD_TOKEN,
+                            headers={"Accept": "application/json", "Referer": URL_SHARE},
+                            timeout=10
+                        )
+                        if res_token.status_code == 200:
+                            t_data = res_token.json()
+                            if t_data.get("key"):
+                                payload = self._decode_jwt_payload(t_data["key"])
+                                if payload and payload.get("uid") is not None:
+                                    uid = int(payload["uid"])
+                                elif payload and payload.get("uid") is None:
+                                    jwt_uid_null = True
+                    except Exception:
+                        pass
 
-            # Extract APP_CONFIG token if available
-            app_token = None
-            cfg_match = re.search(r'window\.APP_CONFIG\s*=\s*({.*?});', html)
-            if cfg_match:
-                try:
-                    cfg_json = json.loads(cfg_match.group(1))
-                    app_token = cfg_json.get("token")
-                except Exception:
-                    pass
+                # 4. If username still missing, check URL_MAIN (https://wvids.com/)
+                if not username and uid:
+                    try:
+                        res_main = session.get(URL_MAIN, timeout=12)
+                        html_main = res_main.text
+                        m_login = re.search(r'class=["\']headerUser__login["\'][^>]*>\s*([^<\s]+)\s*<', html_main)
+                        if m_login:
+                            username = m_login.group(1).strip()
+                        m_href = re.search(r'href=["\'][^"\']*/@([a-zA-Z0-9_\-]+)["\']', html_main)
+                        if m_href and not username:
+                            username = m_href.group(1).strip()
+                    except Exception:
+                        pass
 
-            is_valid = bool(uid and username)
-            add_log("INFO" if is_valid else "WARNING", 
-                    f"Session verification: valid={is_valid}, username={username}, uid={uid}")
+                # If candidate_uid is available from cookie auth_user_id and session was recognized
+                if not uid and candidate_uid and (username or not jwt_uid_null):
+                    uid = candidate_uid
 
-            return {
-                "valid": is_valid,
-                "uid": uid,
-                "username": username,
-                "app_token": app_token,
-                "status_code": res.status_code
-            }
+                # Check if Tor exit node might be returning 404 or block page
+                if attempt == 0 and res_share.status_code >= 400 and res_settings.status_code >= 400:
+                    add_log("WARNING", f"🧅 Узел Tor вернул HTTP {res_share.status_code} на wvids.com. Перестроение цепи Tor...")
+                    tor_manager.new_circuit()
+                    self.reset_session()
+                    session = self.get_session()
+                    await human_jitter(1.0, 1.5)
+                    continue
 
-        except Exception as e:
-            add_log("ERROR", f"Session verification error: {str(e)}")
+                break
+
+            except Exception as e:
+                if attempt == 0:
+                    add_log("WARNING", f"🧅 Сбой связи через Tor ({e}). Попытка смены цепи...")
+                    tor_manager.new_circuit()
+                    self.reset_session()
+                    session = self.get_session()
+                    await human_jitter(1.0, 1.5)
+                    continue
+                else:
+                    add_log("ERROR", f"Session verification error: {str(e)}")
+                    return {
+                        "valid": False,
+                        "uid": None,
+                        "username": None,
+                        "error": f"Ошибка соединения через Tor: {str(e)}"
+                    }
+
+        # 5. Final analysis
+        if jwt_uid_null and not uid:
+            error_msg = (
+                "Сессия не авторизована на wvids.com: куки не подошли или устарели. "
+                "Пожалуйста, авторизуйтесь в аккаунте на wvids.com заново и скопируйте свежие cookies."
+            )
+            add_log("WARNING", "Session verification: rejected by wvids (jwt uid is null)")
             return {
                 "valid": False,
                 "uid": None,
                 "username": None,
-                "error": str(e)
+                "error": error_msg
             }
+
+        # Fallback for username if UID is valid but username tag was not found
+        if uid and not username:
+            if fallback_name and fallback_name.strip():
+                username = fallback_name.strip().lstrip("@")
+            elif "username" in self.cookies and self.cookies["username"].strip():
+                username = self.cookies["username"].strip().lstrip("@")
+            else:
+                username = f"user_{uid}"
+
+        is_valid = bool(uid and username)
+        add_log(
+            "INFO" if is_valid else "WARNING",
+            f"Session verification: valid={is_valid}, username={username}, uid={uid}"
+        )
+
+        if not is_valid:
+            error_msg = (
+                "Не удалось авторизовать сессию на wvids.com. "
+                "Проверьте правильность и актуальность cookies (auth_user_id, auth_sess, auth_p)."
+            )
+            return {
+                "valid": False,
+                "uid": uid,
+                "username": username,
+                "error": error_msg
+            }
+
+        return {
+            "valid": True,
+            "uid": uid,
+            "username": username,
+            "app_token": app_token,
+            "status_code": 200
+        }
+
+    def _decode_jwt_payload(self, token: str) -> Optional[Dict[str, Any]]:
+        try:
+            if not token or not isinstance(token, str):
+                return None
+            parts = token.split(".")
+            if len(parts) < 2:
+                return None
+            b64 = parts[0].replace("-", "+").replace("_", "/")
+            b64 += "=" * ((4 - len(b64) % 4) % 4)
+            return json.loads(base64.b64decode(b64).decode("utf-8"))
+        except Exception:
+            return None
 
     async def get_statistics(self, uid: int, username: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -708,11 +870,289 @@ class WvidsClient:
                     add_log("ERROR", f"🚨 [ПРОВЕРКА СТАТУСА] Аккаунт @{username} заблокирован: {reason2}")
                     return {"status": "suspended", "is_suspended": True, "reason": reason2}
 
-            # Check if authenticated
-            if r.status_code == 200 and ("userpageid" in r.text or "uid" in r.text):
+            # Check if authenticated via share page (primary endpoint)
+            r_share = session.get(URL_SHARE, timeout=12)
+            is_susp_s, reason_s = check_response_for_suspension(r_share.text, r_share.status_code)
+            if is_susp_s:
+                add_log("ERROR", f"🚨 [ПРОВЕРКА СТАТУСА] Аккаунт заблокирован на wvids.com: {reason_s}")
+                return {"status": "suspended", "is_suspended": True, "reason": reason_s}
+
+            if r_share.status_code == 200:
+                cfg_match = re.search(r'window\.config\s*=\s*window\.config\s*\|\|\s*({[\s\S]*?});', r_share.text)
+                if cfg_match:
+                    k_match = re.search(r'apiKey:\s*["\']([^"\']+)["\']', cfg_match.group(1))
+                    if k_match:
+                        payload = self._decode_jwt_payload(k_match.group(1))
+                        if payload and payload.get("uid") is not None:
+                            return {"status": "active", "is_suspended": False, "reason": ""}
+
+            # Check if authenticated via settings
+            if r.status_code == 200 and re.search(r'(?:userpageid|uid)\s*=\s*\d+', r.text):
                 return {"status": "active", "is_suspended": False, "reason": ""}
 
             return {"status": "unauthorized", "is_suspended": False, "reason": "Сессия не авторизована"}
         except Exception as e:
             return {"status": "error", "is_suspended": False, "error": str(e)}
+
+    async def get_popular_videos(
+        self,
+        min_views: int = 0,
+        max_pages: int = 0,
+        stop_check: Optional[Any] = None,
+        progress_callback: Optional[Any] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Scans all pages of 'Популярное' (top) on wvids.com via /api/fetch_content.php.
+        Filters for videos (type == 1) with views >= min_views.
+        max_pages: maximum pages to scan (0 = scan all pages until end).
+        """
+        session = self.get_session()
+        await human_jitter(0.2, 0.4)
+
+        matching_videos: List[Dict[str, Any]] = []
+        seen_fids = set()
+        cursor = None
+        page = 0
+
+        while True:
+            if stop_check and stop_check():
+                add_log("WARNING", "⏹️ Сканирование раздела 'Популярное' прервано по требованию")
+                break
+
+            page += 1
+            if max_pages > 0 and page > max_pages:
+                break
+
+            url = f"{URL_FETCH_CONTENT}?categories=top"
+            if cursor is not None:
+                url += f"&cursor={quote(json.dumps(cursor))}"
+
+            try:
+                res = session.get(
+                    url,
+                    headers={
+                        "Referer": "https://wvids.com/",
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    timeout=25
+                )
+                if res.status_code != 200:
+                    add_log("WARNING", f"Популярное: страница {page} вернула статус {res.status_code}")
+                    break
+
+                data = res.json()
+                raw_items = data.get("i", [])
+                has_more = bool(data.get("h", 0))
+                cursor = data.get("n")
+
+                if not raw_items:
+                    break
+
+                page_matches = 0
+                for it in raw_items:
+                    if not isinstance(it, list) or len(it) < 7:
+                        continue
+
+                    # it[0]: 1=video, 0=image
+                    post_type_code = it[0]
+                    if post_type_code != 1:
+                        # Skip images / photos
+                        continue
+
+                    fid = str(it[1])
+                    if fid in seen_fids:
+                        continue
+                    seen_fids.add(fid)
+
+                    slug = str(it[2]) if len(it) > 2 else fid
+                    user_id = it[3] if len(it) > 3 else None
+                    duration = it[4] if len(it) > 4 else 0
+                    views = int(it[6]) if len(it) > 6 and it[6] is not None else 0
+                    comments = int(it[7]) if len(it) > 7 and it[7] is not None else 0
+                    title = str(it[8]).strip() if len(it) > 8 and it[8] else ""
+
+                    if views >= min_views:
+                        video_obj = {
+                            "file_id": fid,
+                            "slug": slug,
+                            "title": title,
+                            "views": views,
+                            "comments": comments,
+                            "duration": duration,
+                            "user_id": user_id,
+                            "post_url": f"https://wvids.com/{slug}",
+                            "page": page
+                        }
+                        matching_videos.append(video_obj)
+                        page_matches += 1
+
+                if progress_callback:
+                    try:
+                        progress_callback(page, len(matching_videos), len(seen_fids), has_more)
+                    except Exception:
+                        pass
+
+                add_log("INFO", f"📄 Популярное [Стр. {page}]: просмотрено {len(raw_items)} элементов, подходит по просмотрам: {page_matches} (Всего: {len(matching_videos)})")
+
+                if not has_more or not cursor:
+                    # No more pages available
+                    break
+
+                await human_jitter(0.2, 0.4)
+
+            except Exception as e:
+                add_log("ERROR", f"Ошибка запроса страницы {page} раздела Популярное: {str(e)}")
+                break
+
+        add_log("SUCCESS", f"Сканирование 'Популярное' завершено: найдено {len(matching_videos)} видео с просмотрами >= {min_views} (всего просканировано стр.: {page})")
+        return matching_videos
+
+    async def get_video_download_url(self, slug_or_id: str) -> Optional[str]:
+        """
+        Fetches the post page on wvids.com, parses streamToken and idgh,
+        and constructs the direct video stream/download URL.
+        """
+        session = self.get_session()
+        await human_jitter(0.1, 0.3)
+
+        post_url = f"https://wvids.com/{slug_or_id}" if not str(slug_or_id).startswith("http") else str(slug_or_id)
+        try:
+            r = session.get(
+                post_url,
+                headers={"Referer": "https://wvids.com/"},
+                timeout=20
+            )
+            if r.status_code != 200:
+                add_log("WARNING", f"Не удалось открыть страницу видео {post_url}: статус {r.status_code}")
+                return None
+
+            html = r.text
+
+            st_match = re.search(r'streamToken\s*=\s*["\']([^"\']+)["\']', html)
+            stream_token = st_match.group(1) if st_match else None
+
+            ss_match = re.search(r'securitySigner\s*=\s*["\']([^"\']+)["\']', html)
+            security_signer = ss_match.group(1) if ss_match else None
+
+            idgh_match = re.search(r'idgh\s*=\s*["\']([^"\']+)["\']', html)
+            idgh = idgh_match.group(1) if idgh_match else None
+
+            if not idgh:
+                add_log("WARNING", f"На странице {post_url} не найден параметр idgh")
+                return None
+
+            try:
+                cdn_map = json.loads(base64.b64decode(idgh).decode("utf-8"))
+            except Exception as e:
+                add_log("ERROR", f"Ошибка декодирования idgh: {e}")
+                return None
+
+            cdn_host = cdn_map.get("d") or cdn_map.get("m") or cdn_map.get("f")
+            if not cdn_host:
+                add_log("ERROR", f"CDN хост не найден в idgh: {cdn_map}")
+                return None
+
+            # Primary stream URL: streamToken
+            if stream_token:
+                return f"{cdn_host}/s/{stream_token}"
+
+            # Fallback: request token via securitySigner
+            if security_signer:
+                tok_url = f"{cdn_host}/t/{security_signer}"
+                r_tok = session.get(tok_url, headers={"Referer": "https://wvids.com/"}, timeout=15)
+                if r_tok.status_code == 200:
+                    tok_data = r_tok.json()
+                    tok = tok_data.get("token")
+                    if tok:
+                        return f"{cdn_host}/s/{tok}"
+
+            return None
+        except Exception as e:
+            add_log("ERROR", f"Ошибка извлечения ссылки на скачивание видео {slug_or_id}: {e}")
+            return None
+
+    async def download_video_file(
+        self,
+        video_url: str,
+        dest_path: Path,
+        on_progress: Optional[Any] = None,
+        stop_check: Optional[Any] = None,
+        timeout: int = 300
+    ) -> bool:
+        """
+        Streams video content directly to dest_path via a temporary .part file.
+        Atomically replaces dest_path when complete.
+        """
+        session = self.get_session()
+        part_path = dest_path.with_name(f"{dest_path.name}.part")
+
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        for attempt in range(1, 3):
+            if stop_check and stop_check():
+                if part_path.exists():
+                    try:
+                        part_path.unlink()
+                    except Exception:
+                        pass
+                return False
+
+            try:
+                res = session.get(
+                    video_url,
+                    headers={"Referer": "https://wvids.com/"},
+                    timeout=timeout,
+                    stream=True
+                )
+                if res.status_code != 200:
+                    add_log("WARNING", f"Попытка {attempt}: CDN вернул статус {res.status_code} для {video_url[:60]}...")
+                    continue
+
+                total_size = int(res.headers.get("content-length") or 0)
+                downloaded = 0
+
+                with open(part_path, "wb") as f:
+                    for chunk in res.iter_content(chunk_size=256 * 1024):
+                        if stop_check and stop_check():
+                            break
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if on_progress:
+                                try:
+                                    on_progress(downloaded, total_size)
+                                except Exception:
+                                    pass
+                        await asyncio.sleep(0)
+
+                if stop_check and stop_check():
+                    if part_path.exists():
+                        try:
+                            part_path.unlink()
+                        except Exception:
+                            pass
+                    return False
+
+                if total_size > 0 and downloaded < total_size:
+                    add_log("WARNING", f"Попытка {attempt}: получено только {downloaded}/{total_size} байт, повтор...")
+                    continue
+
+                # Finalize file atomically
+                if part_path.exists():
+                    if dest_path.exists():
+                        dest_path.unlink()
+                    part_path.rename(dest_path)
+                    return True
+
+            except Exception as e:
+                add_log("WARNING", f"Попытка {attempt} загрузки видео завершилась ошибкой: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.5)
+
+        if part_path.exists():
+            try:
+                part_path.unlink()
+            except Exception:
+                pass
+        return False
 

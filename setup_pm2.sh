@@ -34,7 +34,7 @@ fi
 echo -e "\n${GREEN}[1/6] Проверка и установка системных зависимостей (Python3, Tor, curl)...${NC}"
 if [ -n "$SUDO" ] || [ "$EUID" -eq 0 ]; then
     $SUDO apt-get update -y
-    $SUDO apt-get install -y python3 python3-pip python3-venv tor curl ffmpeg fonts-dejavu-core
+    $SUDO apt-get install -y python3 python3-pip python3-venv tor curl ffmpeg fonts-dejavu-core obfs4proxy
 else
     if ! command -v python3 >/dev/null 2>&1; then
         echo -e "${RED}[ERROR] Python3 не установлен! Установите python3.${NC}"
@@ -55,11 +55,11 @@ elif command -v service >/dev/null 2>&1; then
     fi
 fi
 
-# Check if Tor is listening on 9050
-if ss -tuln | grep -q ":9050 " || netstat -tuln 2>/dev/null | grep -q ":9050 "; then
-    echo -e "${GREEN} ▸ Tor успешно запущен и слушает порт 9050.${NC}"
+# Check if Tor is listening on 9150 or 9050
+if ss -tuln | grep -E -q ":(9150|9050) " || netstat -tuln 2>/dev/null | grep -E -q ":(9150|9050) "; then
+    echo -e "${GREEN} ▸ Tor доступен на портах 9150/9050.${NC}"
 else
-    echo -e "${YELLOW} ▸ Tor пока не открыл порт 9050. Панель запустит автономный Tor при старте.${NC}"
+    echo -e "${YELLOW} ▸ Панель автоматически запустит автономный Tor с мостами obfs4 при старте.${NC}"
 fi
 
 # 4. Check / Install Node.js, npm and PM2

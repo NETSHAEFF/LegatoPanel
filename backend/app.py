@@ -3,6 +3,7 @@ import shutil
 import asyncio
 import time
 import uuid
+import json
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, BackgroundTasks
@@ -15,6 +16,7 @@ from .config import (
     BASE_DIR,
     UPLOADS_DIR,
     VIDEOS_DIR,
+    DOWNLOAD_VIDEO_DIR,
     WATERMARKS_DIR,
     DEFAULT_FINGERPRINT,
     SUPPORTED_FINGERPRINTS
@@ -24,6 +26,7 @@ from .client import WvidsClient
 from .uploader import ContentUploader
 from .batch_worker import batch_worker
 from .bulk_redactor import bulk_redactor
+from .popular_downloader import popular_downloader
 from .tor import (
     check_tor_connection,
     auto_detect_tor_port,
@@ -39,6 +42,7 @@ from .storage import (
     save_account,
     update_account_stats,
     update_account_username,
+    update_account_settings,
     mark_account_suspended,
     mark_account_active,
     delete_account,
@@ -52,7 +56,10 @@ from .storage import (
     get_setting,
     set_setting,
     get_processing_settings,
-    save_processing_settings
+    save_processing_settings,
+    get_account_processing_settings,
+    save_account_processing_settings,
+    get_account_metadata_templates
 )
 from .video_processor import (
     POPULAR_FONTS,
@@ -75,6 +82,15 @@ STATIC_DIR = BASE_DIR / "frontend" / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 # In-memory progress tracker for live uploads
 active_uploads: Dict[str, Dict[str, Any]] = {}
@@ -116,7 +132,10 @@ async def list_accounts():
 async def verify_and_save_account(req: VerifyAccountRequest):
     cookies_dict = parse_cookies_input(req.cookies)
     if not cookies_dict:
-        raise HTTPException(status_code=400, detail="Не удалось распознать cookies. Вставьте строку cookie или JSON.")
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось распознать cookies. Вставьте строку cookies (например, auth_user_id=...; auth_sess=...) или JSON."
+        )
 
     client = WvidsClient(
         cookies=cookies_dict,
@@ -124,20 +143,27 @@ async def verify_and_save_account(req: VerifyAccountRequest):
         use_tor=True
     )
 
-    verify_result = await client.verify_session()
+    verify_result = await client.verify_session(fallback_name=req.name)
     if not verify_result.get("valid"):
         detail_msg = verify_result.get("error") or "Сессия не авторизована на wvids.com. Проверьте cookies auth_user_id / auth_sess / auth_p."
         raise HTTPException(status_code=400, detail=detail_msg)
 
     uid = verify_result.get("uid")
-    username = verify_result.get("username")
+    username = verify_result.get("username") or (req.name.strip().lstrip("@") if req.name else f"user_{uid}")
     acc_name = req.name or f"@{username}"
 
-    # Fetch initial stats
-    stats = await client.get_statistics(uid, username)
-    subscribers = stats.get("subscribers", 0) if stats.get("success") else 0
-    views_today = stats.get("views_today", 0) if stats.get("success") else 0
-    total_views = stats.get("total_views", 0) if stats.get("success") else 0
+    # Safely fetch initial stats without failing account creation
+    subscribers = 0
+    views_today = 0
+    total_views = 0
+    try:
+        stats = await client.get_statistics(uid, username)
+        if stats.get("success"):
+            subscribers = stats.get("subscribers", 0)
+            views_today = stats.get("views_today", 0)
+            total_views = stats.get("total_views", 0)
+    except Exception as e:
+        add_log("WARNING", f"Не удалось загрузить начальную статистику для @{username}: {e}")
 
     acc_id = save_account(
         name=acc_name,
@@ -231,6 +257,47 @@ async def simulate_suspension_endpoint(account_id: int, req: SimulateSuspensionR
         "is_suspended": req.simulate,
         "message": msg,
         "account": get_account_by_id(account_id)
+    }
+
+class AccountSettingsRequest(BaseModel):
+    title_template: Optional[str] = None
+    desc_template: Optional[str] = None
+    is_batch_enabled: Optional[bool] = None
+    watermark_settings: Optional[Dict[str, Any]] = None
+
+@app.get("/api/accounts/{account_id}/settings")
+async def get_account_settings_endpoint(account_id: int):
+    acc = get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Аккаунт не найден")
+    return {
+        "success": True,
+        "account_id": account_id,
+        "username": acc.get("username", ""),
+        "title_template": acc.get("title_template", ""),
+        "desc_template": acc.get("desc_template", ""),
+        "is_batch_enabled": acc.get("is_batch_enabled", True),
+        "watermark_settings": acc.get("watermark_settings", {}),
+        "effective_processing": get_account_processing_settings(account_id)
+    }
+
+@app.post("/api/accounts/{account_id}/settings")
+async def save_account_settings_endpoint(account_id: int, req: AccountSettingsRequest):
+    acc = get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Аккаунт не найден")
+    updated = update_account_settings(
+        account_id=account_id,
+        title_template=req.title_template,
+        desc_template=req.desc_template,
+        watermark_settings=req.watermark_settings,
+        is_batch_enabled=req.is_batch_enabled
+    )
+    add_log("INFO", f"Обновлены персональные настройки аккаунта @{acc.get('username')}")
+    return {
+        "success": True,
+        "account": updated,
+        "message": f"Настройки для @{acc.get('username')} успешно сохранены!"
     }
 
 # Statistics
@@ -415,6 +482,8 @@ class StartBatchRequest(BaseModel):
     delay_minutes: Optional[float] = 5.0
     title_template: Optional[str] = ""
     desc_template: Optional[str] = ""
+    loop_mode: Optional[bool] = True
+    account_id: Optional[int] = None
 
 @app.get("/api/batch/files")
 async def get_batch_files(folder: Optional[str] = "videos"):
@@ -438,7 +507,7 @@ async def get_batch_status():
 
 @app.post("/api/batch/start")
 async def start_batch_endpoint(req: StartBatchRequest):
-    active = get_active_account()
+    active = get_account_by_id(req.account_id) if req.account_id else get_active_account()
     if not active:
         raise HTTPException(status_code=400, detail="Сначала добавьте и активируйте аккаунт для выгрузки")
     if active.get("is_suspended"):
@@ -446,17 +515,19 @@ async def start_batch_endpoint(req: StartBatchRequest):
             status_code=400,
             detail=f"Пакетная публикация невозможна: Аккаунт @{active.get('username')} заблокирован (Account suspended)."
         )
-    
+
     target = req.folder_path or "videos"
     p = VIDEOS_DIR if target.strip() in ["videos", "/videos", "\\videos", ""] else Path(target.strip())
-    
+
     desc = req.desc_template.strip() if (req.desc_template and req.desc_template.strip()) else get_setting("batch_desc", "")
+    title = req.title_template.strip() if (req.title_template and req.title_template.strip()) else get_setting("batch_title", "")
     res = await batch_worker.start(
         folder_path=str(p),
         delay_minutes=req.delay_minutes or 5.0,
-        title_template=req.title_template or "",
+        title_template=title,
         desc_template=desc,
-        account_id=active["id"]
+        account_id=active["id"],
+        loop_mode=True if req.loop_mode is None else req.loop_mode
     )
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("error", "Не удалось запустить пакетную выгрузку"))
@@ -474,8 +545,30 @@ async def get_batch_settings():
         "folder": get_setting("batch_folder", "videos"),
         "interval_min": float(get_setting("batch_interval_min", "5")),
         "title": get_setting("batch_title", ""),
-        "desc": get_setting("batch_desc", "")
+        "desc": get_setting("batch_desc", ""),
+        "loop_mode": get_setting("batch_loop_enabled", "1") == "1"
     }
+
+class SaveBatchSettingsRequest(BaseModel):
+    folder: Optional[str] = None
+    interval_min: Optional[float] = None
+    title: Optional[str] = None
+    desc: Optional[str] = None
+    loop_mode: Optional[bool] = None
+
+@app.post("/api/batch/settings")
+async def save_batch_settings(req: SaveBatchSettingsRequest):
+    if req.folder is not None:
+        set_setting("batch_folder", req.folder.strip())
+    if req.interval_min is not None:
+        set_setting("batch_interval_min", str(req.interval_min))
+    if req.title is not None:
+        set_setting("batch_title", req.title.strip())
+    if req.desc is not None:
+        set_setting("batch_desc", req.desc.strip())
+    if req.loop_mode is not None:
+        set_setting("batch_loop_enabled", "1" if req.loop_mode else "0")
+    return {"success": True, "message": "Настройки очереди успешно сохранены"}
 
 # Bulk Post Redaction (All pages pagination: page=1, 2, 3, 4...)
 class BulkRedactRequest(BaseModel):
@@ -553,6 +646,83 @@ async def single_redact_post(req: SingleRedactRequest):
         raise HTTPException(status_code=400, detail=err)
     return {"success": True, "result": res}
 
+# Popular Videos Downloader (top category, multi-page cursor scan, min views filter)
+class PopularDownloadRequest(BaseModel):
+    min_views: Optional[int] = 0
+    max_pages: Optional[int] = 0
+    folder: Optional[str] = "video"
+    limit: Optional[int] = 0
+
+@app.get("/api/popular/status")
+async def get_popular_status():
+    return {
+        "success": True,
+        "status": popular_downloader.get_status()
+    }
+
+@app.get("/api/popular/scan")
+async def scan_popular_videos(min_views: Optional[int] = 0, max_pages: Optional[int] = 0):
+    popular_downloader._stop_requested = False
+    active = get_active_account()
+    client = get_client_for_account(active) if active else WvidsClient(use_tor=True)
+    videos = await popular_downloader.scan_only(client=client, min_views=min_views or 0, max_pages=max_pages or 0)
+    return {
+        "success": True,
+        "total": len(videos),
+        "min_views": min_views or 0,
+        "videos": videos
+    }
+
+@app.post("/api/popular/start")
+async def start_popular_download(req: PopularDownloadRequest):
+    active = get_active_account()
+    client = get_client_for_account(active) if active else WvidsClient(use_tor=True)
+    res = await popular_downloader.start(
+        client=client,
+        min_views=req.min_views or 0,
+        max_pages=req.max_pages or 0,
+        folder_path=req.folder or "video",
+        limit=req.limit or 0
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Не удалось запустить скачивание"))
+    return res
+
+@app.post("/api/popular/stop")
+async def stop_popular_download():
+    res = await popular_downloader.stop()
+    return res
+
+@app.get("/api/popular/files")
+async def get_downloaded_popular_files(folder: Optional[str] = "video"):
+    p = Path(folder.strip()) if folder and folder.strip() not in ["video", "/video", "\\video", ""] else DOWNLOAD_VIDEO_DIR
+    if not p.is_absolute():
+        p = BASE_DIR / p
+    if not p.exists() or not p.is_dir():
+        return {"folder": str(p), "files": [], "total": 0}
+
+    files = []
+    for ext in ["*.mp4", "*.webm", "*.mov"]:
+        for f in p.glob(ext):
+            if f.is_file():
+                try:
+                    stat = f.stat()
+                    files.append({
+                        "name": f.name,
+                        "path": str(f.resolve()),
+                        "size": stat.st_size,
+                        "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                        "mtime": stat.st_mtime
+                    })
+                except Exception:
+                    pass
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return {
+        "folder": str(p),
+        "files": files,
+        "total": len(files)
+    }
+
 # Tor Network Management
 class TorConfigRequest(BaseModel):
     enabled: bool
@@ -586,7 +756,7 @@ async def update_tor_configuration(req: TorConfigRequest):
 async def get_tor_status():
     cfg = get_tor_config()
     detected = auto_detect_tor_port()
-    port = cfg.get("port") or detected or 9050
+    port = cfg.get("port") or detected or 9150
     status = check_tor_connection(port=port)
     service_status = tor_manager.get_status()
     return {
@@ -606,7 +776,9 @@ async def get_tor_service_status():
 
 @app.post("/api/tor/service/start")
 async def start_tor_service_endpoint():
-    res = tor_manager.start(port=9050)
+    cfg = get_tor_config()
+    target_port = cfg.get("port") or 9150
+    res = tor_manager.start(port=target_port)
     return res
 
 @app.post("/api/tor/service/stop")
@@ -614,12 +786,17 @@ async def stop_tor_service_endpoint():
     res = tor_manager.stop()
     return res
 
+@app.post("/api/tor/new-identity")
+async def tor_new_identity_endpoint():
+    res = tor_manager.new_circuit()
+    return res
+
 @app.post("/api/tor/test")
 async def test_tor_connection_endpoint(req: TorTestRequest):
     port = req.port
     if not port:
         cfg = get_tor_config()
-        port = cfg.get("port") or auto_detect_tor_port() or 9050
+        port = cfg.get("port") or auto_detect_tor_port() or 9150
     status = check_tor_connection(port=port)
     return {
         "success": status.get("connected", False),
@@ -700,32 +877,56 @@ async def clear_logs_endpoint():
 # Video Processing (Watermark & Uniqueizer)
 class ProcessorSettingsRequest(BaseModel):
     settings: Dict[str, Any]
+    account_id: Optional[int] = None
 
 class ProcessorTestRequest(BaseModel):
     video_path: Optional[str] = None
+    account_id: Optional[int] = None
 
 @app.get("/api/processor/settings")
-async def get_processor_settings_endpoint():
+async def get_processor_settings_endpoint(account_id: Optional[int] = None):
+    settings = get_account_processing_settings(account_id) if account_id else get_processing_settings()
+    acc_name = None
+    if account_id:
+        acc = get_account_by_id(account_id)
+        if acc:
+            acc_name = acc.get("username")
+
     return {
         "success": True,
-        "settings": get_processing_settings(),
+        "account_id": account_id,
+        "account_username": acc_name,
+        "settings": settings,
         "fonts": POPULAR_FONTS,
         "devices": DEVICE_PROFILES
     }
 
 @app.post("/api/processor/settings")
 async def save_processor_settings_endpoint(req: ProcessorSettingsRequest):
-    updated = save_processing_settings(req.settings)
-    add_log("INFO", "Сохранены новые настройки водяного знака и уникализатора видео")
+    if req.account_id:
+        updated = save_account_processing_settings(req.account_id, req.settings)
+        acc = get_account_by_id(req.account_id)
+        u_name = f"@{acc.get('username')}" if acc else f"#{req.account_id}"
+        add_log("INFO", f"Сохранены персональные настройки водяного знака для {u_name}")
+        msg = f"Персональные настройки водяного знака для {u_name} успешно сохранены!"
+    else:
+        updated = save_processing_settings(req.settings)
+        add_log("INFO", "Сохранены глобальные настройки водяного знака и уникализатора видео")
+        msg = "Глобальные настройки водяного знака и уникализации успешно сохранены!"
+
     return {
         "success": True,
+        "account_id": req.account_id,
         "settings": updated,
-        "message": "Настройки водяного знака и уникализации успешно сохранены!"
+        "message": msg
     }
 
 @app.post("/api/processor/upload-watermark-media")
-async def upload_watermark_media_endpoint(file: UploadFile = File(...)):
-    """Handles upload of photo or video watermark via Drag & Drop."""
+async def upload_watermark_media_endpoint(
+    file: UploadFile = File(...),
+    account_id: Optional[int] = Form(None)
+):
+    """Handles upload of photo or video watermark via Drag & Drop (global or per-account)."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Файл не передан")
 
@@ -741,17 +942,8 @@ async def upload_watermark_media_endpoint(file: UploadFile = File(...)):
 
     media_type = "video" if ext in allowed_videos else "image"
 
-    # Clean previous watermark media file if present
-    cfg = get_processing_settings()
-    old_p = cfg.get("watermark_media_path")
-    if old_p and Path(old_p).is_file():
-        try:
-            Path(old_p).unlink()
-        except Exception:
-            pass
-
-    # Save new watermark file
-    safe_name = f"wm_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+    prefix = f"wm_acc{account_id}" if account_id else "wm"
+    safe_name = f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
     dest_path = WATERMARKS_DIR / safe_name
 
     try:
@@ -761,27 +953,54 @@ async def upload_watermark_media_endpoint(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка сохранения файла: {str(e)}")
 
-    # Update settings
-    updated = save_processing_settings({
-        "watermark_media_path": str(dest_path.resolve()),
-        "watermark_media_name": file.filename,
-        "watermark_media_type": media_type
-    })
+    if account_id:
+        acc = get_account_by_id(account_id)
+        old_wm = acc.get("watermark_settings", {}) if acc else {}
+        old_p = old_wm.get("watermark_media_path")
+        if old_p and Path(old_p).is_file() and str(old_p) != str(dest_path):
+            try:
+                Path(old_p).unlink()
+            except Exception:
+                pass
 
-    add_log("INFO", f"Загружен медиа-вотемарк: {file.filename} ({media_type})")
+        updated = save_account_processing_settings(account_id, {
+            "watermark_media_path": str(dest_path.resolve()),
+            "watermark_media_name": file.filename,
+            "watermark_media_type": media_type
+        })
+        u_name = f"@{acc.get('username')}" if acc else f"#{account_id}"
+        add_log("INFO", f"Загружен индивидуальный медиа-вотемарк для {u_name}: {file.filename}")
+        msg = f"Медиа-вотемарк '{file.filename}' для {u_name} успешно загружен!"
+    else:
+        cfg = get_processing_settings()
+        old_p = cfg.get("watermark_media_path")
+        if old_p and Path(old_p).is_file() and str(old_p) != str(dest_path):
+            try:
+                Path(old_p).unlink()
+            except Exception:
+                pass
+
+        updated = save_processing_settings({
+            "watermark_media_path": str(dest_path.resolve()),
+            "watermark_media_name": file.filename,
+            "watermark_media_type": media_type
+        })
+        add_log("INFO", f"Загружен глобальный медиа-вотемарк: {file.filename} ({media_type})")
+        msg = f"Медиа-вотемарк '{file.filename}' успешно загружен!"
 
     return {
         "success": True,
-        "message": f"Медиа-вотемарк '{file.filename}' успешно загружен!",
+        "account_id": account_id,
+        "message": msg,
         "media_name": file.filename,
         "media_type": media_type,
         "settings": updated
     }
 
 @app.get("/api/processor/watermark-media-file")
-async def get_watermark_media_file():
+async def get_watermark_media_file(account_id: Optional[int] = None):
     """Returns the current watermark image/video for web panel preview."""
-    cfg = get_processing_settings()
+    cfg = get_account_processing_settings(account_id) if account_id else get_processing_settings()
     p_str = cfg.get("watermark_media_path")
     if not p_str or not Path(p_str).is_file():
         raise HTTPException(status_code=404, detail="Медиа-вотемарк не установлен")
@@ -790,7 +1009,7 @@ async def get_watermark_media_file():
     ext = p.suffix.lower()
     if ext in [".mp4", ".mov", ".webm", ".mkv"]:
         media_type = "video/mp4"
-    elif ext == ".jpg" or ext == ".jpeg":
+    elif ext in [".jpg", ".jpeg"]:
         media_type = "image/jpeg"
     elif ext == ".png":
         media_type = "image/png"
@@ -804,32 +1023,55 @@ async def get_watermark_media_file():
     return FileResponse(p, media_type=media_type)
 
 @app.delete("/api/processor/watermark-media")
-async def delete_watermark_media_endpoint():
+async def delete_watermark_media_endpoint(account_id: Optional[int] = None):
     """Removes current watermark media file."""
-    cfg = get_processing_settings()
-    p_str = cfg.get("watermark_media_path")
-    if p_str and Path(p_str).is_file():
-        try:
-            Path(p_str).unlink()
-        except Exception:
-            pass
+    if account_id:
+        acc = get_account_by_id(account_id)
+        old_wm = acc.get("watermark_settings", {}) if acc else {}
+        p_str = old_wm.get("watermark_media_path")
+        if p_str and Path(p_str).is_file():
+            try:
+                Path(p_str).unlink()
+            except Exception:
+                pass
+        updated = save_account_processing_settings(account_id, {
+            "watermark_media_path": "",
+            "watermark_media_name": "",
+            "watermark_media_type": "image"
+        })
+        u_name = f"@{acc.get('username')}" if acc else f"#{account_id}"
+        add_log("INFO", f"Индивидуальный медиа-вотемарк для {u_name} удален")
+        return {
+            "success": True,
+            "account_id": account_id,
+            "message": f"Медиа-вотемарк для {u_name} удален",
+            "settings": updated
+        }
+    else:
+        cfg = get_processing_settings()
+        p_str = cfg.get("watermark_media_path")
+        if p_str and Path(p_str).is_file():
+            try:
+                Path(p_str).unlink()
+            except Exception:
+                pass
 
-    updated = save_processing_settings({
-        "watermark_media_path": "",
-        "watermark_media_name": "",
-        "watermark_media_type": "image"
-    })
+        updated = save_processing_settings({
+            "watermark_media_path": "",
+            "watermark_media_name": "",
+            "watermark_media_type": "image"
+        })
 
-    add_log("INFO", "Медиа-вотемарк удален")
-    return {
-        "success": True,
-        "message": "Медиа-вотемарк успешно удален",
-        "settings": updated
-    }
+        add_log("INFO", "Глобальный медиа-вотемарк удален")
+        return {
+            "success": True,
+            "message": "Медиа-вотемарк успешно удален",
+            "settings": updated
+        }
 
 @app.post("/api/processor/test")
 async def test_processor_endpoint(req: ProcessorTestRequest):
-    res = await run_test_processing(req.video_path)
+    res = await run_test_processing(req.video_path, account_id=req.account_id)
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("error", "Ошибка тестовой обработки видео"))
     return res

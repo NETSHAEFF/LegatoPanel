@@ -4,6 +4,7 @@ import string
 import base64
 import json
 import asyncio
+import re
 from typing import Dict, Any, Optional
 
 def generate_actionfingerprint() -> Dict[str, Any]:
@@ -94,62 +95,111 @@ def parse_cookies_input(cookie_input: Any) -> Dict[str, str]:
     """
     Parses cookies from any format:
     1. Header string: "auth_user_id=123; auth_sess=xyz; auth_p=abc"
-    2. JSON array: [{"name": "auth_user_id", "value": "123"}, ...]
-    3. Dict: {"auth_user_id": "123", ...}
-    4. Netscape format lines
+    2. Header with Cookie: prefix: "Cookie: auth_user_id=123; ..."
+    3. JSON array / object from extensions (Cookie-Editor, EditThisCookie)
+    4. Dict: {"auth_user_id": "123", ...}
+    5. Netscape / cookies.txt format (tab-separated)
+    6. Multiline key=value pairs or & separated
     """
     cookies: Dict[str, str] = {}
     if not cookie_input:
         return cookies
 
     if isinstance(cookie_input, dict):
-        return {str(k).strip(): str(v).strip() for k, v in cookie_input.items()}
+        return {
+            str(k).strip().strip("\"' "): str(v).strip().strip("\"' ")
+            for k, v in cookie_input.items()
+            if k
+        }
 
     if isinstance(cookie_input, list):
         for item in cookie_input:
             if isinstance(item, dict) and "name" in item and "value" in item:
-                cookies[str(item["name"]).strip()] = str(item["value"]).strip()
+                k = str(item["name"]).strip().strip("\"' ")
+                v = str(item["value"]).strip().strip("\"' ")
+                if k:
+                    cookies[k] = v
         return cookies
 
     text = str(cookie_input).strip()
 
-    # Try parsing as JSON first
+    # Strip global 'Cookie:' / 'cookies:' prefix if present
+    if re.match(r'^(?:cookie|cookies)\s*:\s*', text, re.IGNORECASE):
+        text = re.sub(r'^(?:cookie|cookies)\s*:\s*', '', text, flags=re.IGNORECASE).strip()
+
+    # Try parsing as JSON first (handling both [] and {})
     if text.startswith("[") or text.startswith("{"):
         try:
             parsed = json.loads(text)
             if isinstance(parsed, dict):
-                return {str(k).strip(): str(v).strip() for k, v in parsed.items()}
+                return {
+                    str(k).strip().strip("\"' "): str(v).strip().strip("\"' ")
+                    for k, v in parsed.items()
+                    if k
+                }
             if isinstance(parsed, list):
                 for item in parsed:
                     if isinstance(item, dict) and "name" in item and "value" in item:
-                        cookies[str(item["name"]).strip()] = str(item["value"]).strip()
+                        k = str(item["name"]).strip().strip("\"' ")
+                        v = str(item["value"]).strip().strip("\"' ")
+                        if k:
+                            cookies[k] = v
                 if cookies:
                     return cookies
         except Exception:
-            pass
+            # Fallback for single-quoted pseudo-JSON
+            try:
+                import ast
+                parsed = ast.literal_eval(text)
+                if isinstance(parsed, dict):
+                    return {
+                        str(k).strip().strip("\"' "): str(v).strip().strip("\"' ")
+                        for k, v in parsed.items()
+                        if k
+                    }
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict) and "name" in item and "value" in item:
+                            k = str(item["name"]).strip().strip("\"' ")
+                            v = str(item["value"]).strip().strip("\"' ")
+                            if k:
+                                cookies[k] = v
+                    if cookies:
+                        return cookies
+            except Exception:
+                pass
 
-    # Standard "key=value; key2=value2" or multiline
+    # Line-by-line / Semicolon / Ampersand / Netscape parsing
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        # Netscape format (tab separated)
+
+        # Strip line-level 'Cookie:' prefix
+        if re.match(r'^(?:cookie|cookies)\s*:\s*', line, re.IGNORECASE):
+            line = re.sub(r'^(?:cookie|cookies)\s*:\s*', '', line, flags=re.IGNORECASE).strip()
+
+        # Netscape format (tab separated: domain, flag, path, secure, expiration, name, value)
         if "\t" in line:
             parts = line.split("\t")
             if len(parts) >= 7:
                 name, val = parts[5].strip(), parts[6].strip()
                 if name:
-                    cookies[name] = val
+                    cookies[name.strip("\"' ")] = val.strip("\"' ")
                 continue
 
-        # Semicolon separated
-        parts = line.split(";")
+        # Split on ; or & (supports both cookie header and query-style strings)
+        parts = re.split(r'[;&]', line)
         for part in parts:
             part = part.strip()
             if "=" in part:
                 k, v = part.split("=", 1)
                 k = k.strip()
                 v = v.strip()
+                if re.match(r'^(?:cookie|cookies)\s*:\s*', k, re.IGNORECASE):
+                    k = re.sub(r'^(?:cookie|cookies)\s*:\s*', '', k, flags=re.IGNORECASE).strip()
+                k = k.strip("\"' ")
+                v = v.strip("\"' ")
                 if k:
                     cookies[k] = v
 

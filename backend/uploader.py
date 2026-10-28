@@ -11,7 +11,7 @@ from .config import MAX_FILE_SIZE_BYTES, URL_SHARE, DEFAULT_HOST
 from .client import WvidsClient
 from .fingerprint import human_jitter
 from .storage import add_log, update_upload_record
-from .video_processor import process_video_if_enabled
+from .video_processor import process_video_if_enabled, process_image_if_enabled
 
 # Common media MIME types fallback
 MIME_MAP = {
@@ -95,10 +95,93 @@ class ContentUploader:
         filename = file_p.name
         original_stem = file_p.stem
 
-        report("1/4: Получение конфигурации и проверка статуса аккаунта...", 15)
-        add_log("INFO", f"Начало выгрузки {filename} ({file_size / (1024*1024):.1f} MB, {mime_type})")
+        username = ""
+        if account_id:
+            try:
+                from .storage import get_account_by_id
+                acc = get_account_by_id(account_id)
+                if acc:
+                    username = acc.get("username", "")
+            except Exception:
+                pass
+        if not username:
+            try:
+                from .storage import get_active_account
+                active_acc = get_active_account()
+                if active_acc:
+                    username = active_acc.get("username", "")
+            except Exception:
+                pass
 
-        # 1. Fetch config and API Key
+        # Pre-processing: Apply Watermark & Uniqueization if enabled (BEFORE fetching upload token)
+        processed_file_path = None
+        effective_file_p = file_p
+        effective_filename = filename
+        effective_mime_type = mime_type
+
+        is_video = mime_type.startswith("video/") or file_p.suffix.lower() in [
+            ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"
+        ]
+
+        if is_video:
+            report("Обработка: наложение водяного знака и уникализация...", 25)
+            try:
+                proc_res = await process_video_if_enabled(
+                    input_file=str(file_p),
+                    title=title or original_stem,
+                    username=username,
+                    account_id=account_id,
+                    progress_callback=lambda msg, pct: report(msg, pct)
+                )
+                if proc_res.get("skipped"):
+                    skip_reason = proc_res.get("reason", "Превышен лимит времени уникализации (более 5 минут)")
+                    add_log("WARNING", f"⏩ Видео {filename} пропущено: {skip_reason}")
+                    if record_id:
+                        update_upload_record(record_id, "skipped", error=skip_reason)
+                    return {
+                        "success": False,
+                        "is_skipped": True,
+                        "error": skip_reason,
+                        "filename": filename
+                    }
+                elif proc_res.get("processed"):
+                    processed_file_path = proc_res.get("output_path")
+                    effective_file_p = Path(processed_file_path)
+                    effective_filename = effective_file_p.name
+                    effective_mime_type = detect_mime_type(str(effective_file_p))
+                    file_size = effective_file_p.stat().st_size
+                    add_log("SUCCESS", f"Видео {filename} уникализировано: {proc_res.get('details')}")
+            except Exception as pe:
+                add_log("WARNING", f"Не удалось выполнить уникализацию {filename}: {pe}. Загружаем исходный файл.")
+
+        is_image = mime_type.startswith("image/") or file_p.suffix.lower() in [
+            ".jpg", ".jpeg", ".png", ".webp"
+        ]
+
+        if is_image:
+            report("Обработка: наложение водяного знака на фото...", 25)
+            try:
+                proc_res = await process_image_if_enabled(
+                    input_file=str(file_p),
+                    title=title or original_stem,
+                    username=username,
+                    account_id=account_id,
+                    progress_callback=lambda msg, pct: report(msg, pct)
+                )
+                if proc_res.get("processed"):
+                    processed_file_path = proc_res.get("output_path")
+                    effective_file_p = Path(processed_file_path)
+                    effective_filename = effective_file_p.name
+                    effective_mime_type = detect_mime_type(str(effective_file_p))
+                    file_size = effective_file_p.stat().st_size
+                    add_log("SUCCESS", f"Фото {filename} обработано с водяным знаком: {proc_res.get('details')}")
+            except Exception as pe:
+                add_log("WARNING", f"Не удалось наложить водяной знак на фото {filename}: {pe}. Загружаем исходный файл.")
+
+        report("1/4: Получение свежего токена загрузки и проверка аккаунта...", 35)
+        add_log("INFO", f"Начало выгрузки {filename} ({file_size / (1024*1024):.1f} MB, {effective_mime_type})")
+
+        # 1. Fetch fresh config and API Key immediately before CurlMime upload
         config = await self.client.get_upload_config()
         if config.get("is_suspended"):
             err = "Аккаунт заблокирован на wvids.com: Account suspended"
@@ -112,50 +195,14 @@ class ContentUploader:
         api_key = config.get("apiKey")
         upload_url = config.get("uploadUrl")
         api_url = config.get("apiUrl")
+        if config.get("username"):
+            username = config.get("username")
 
         if not api_key:
             err = "Не удалось получить токен загрузки apiKey. Проверьте cookies аккаунта."
             add_log("ERROR", err)
             if record_id: update_upload_record(record_id, "failed", error=err)
             return {"success": False, "error": err}
-
-        # Pre-processing: Apply Watermark & Uniqueization if enabled
-        processed_file_path = None
-        effective_file_p = file_p
-        effective_filename = filename
-        effective_mime_type = mime_type
-
-        is_video = mime_type.startswith("video/") or file_p.suffix.lower() in [
-            ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"
-        ]
-
-        if is_video:
-            username = ""
-            try:
-                from .storage import get_active_account
-                acc = get_active_account()
-                if acc:
-                    username = acc.get("username", "")
-            except Exception:
-                pass
-
-            report("Обработка: наложение водяного знака и уникализация...", 25)
-            try:
-                proc_res = await process_video_if_enabled(
-                    input_file=str(file_p),
-                    title=title or original_stem,
-                    username=username,
-                    progress_callback=lambda msg, pct: report(msg, pct)
-                )
-                if proc_res.get("processed"):
-                    processed_file_path = proc_res.get("output_path")
-                    effective_file_p = Path(processed_file_path)
-                    effective_filename = effective_file_p.name
-                    effective_mime_type = detect_mime_type(str(effective_file_p))
-                    file_size = effective_file_p.stat().st_size
-                    add_log("SUCCESS", f"Видео {filename} уникализировано: {proc_res.get('details')}")
-            except Exception as pe:
-                add_log("WARNING", f"Не удалось выполнить уникализацию {filename}: {pe}. Загружаем исходный файл.")
 
         report("2/4: Передача файла через антидетект TLS/HTTP2...", 35)
         await human_jitter(0.3, 0.7)
@@ -287,6 +334,16 @@ class ContentUploader:
             await human_jitter(0.4, 0.8)
 
             # 4. Finalize and Share
+            # First, record the current top post FID on the user profile so we can detect when the new post appears
+            latest_top_fid_before = None
+            if username:
+                try:
+                    pre_posts = await self.client.get_all_user_posts(username=username, max_pages=1)
+                    if pre_posts and pre_posts[0].get("file_id"):
+                        latest_top_fid_before = str(pre_posts[0].get("file_id"))
+                except Exception:
+                    pass
+
             share_payload = {
                 "share": "1",
                 "key": api_key
@@ -313,61 +370,73 @@ class ContentUploader:
             # When published via share.php, wvids creates a live post with a new post ID (e.g. 9489861).
             # We locate the newly published post on the user channel to attach description & title.
             real_fid = None
-            username = config.get("username")
-            if not username:
-                try:
-                    from .storage import get_active_account
-                    acc = get_active_account()
-                    if acc and acc.get("username"):
-                        username = acc.get("username")
-                except Exception:
-                    pass
+            if not username and config.get("username"):
+                username = config.get("username")
 
-            if not username:
-                try:
-                    v = await self.client.verify_session()
-                    username = v.get("username")
-                except Exception:
-                    pass
-
-            report("4/4: Применение описания к опубликованному посту...", 92)
-            await human_jitter(0.8, 1.4)
+            report("4/4: Применение заголовка и описания к посту...", 92)
+            await human_jitter(1.0, 1.8)
 
             if username:
-                for attempt in range(4):
+                for attempt in range(6):
                     try:
                         latest_posts = await self.client.get_all_user_posts(username=username, max_pages=1)
                         if latest_posts:
                             # 1. Match by title first
                             for p in latest_posts[:5]:
-                                if p.get("title") and (p.get("title").strip() == target_title.strip() or target_title.strip() in p.get("title")):
+                                p_title = (p.get("title") or "").strip()
+                                if p_title and (p_title == target_title.strip() or target_title.strip() in p_title):
                                     real_fid = str(p.get("file_id"))
                                     break
-                            # 2. Fallback to topmost (most recent) post
+                            # 2. Check if topmost post is newly appeared (different FID than before share)
                             if not real_fid and latest_posts[0].get("file_id"):
-                                real_fid = str(latest_posts[0].get("file_id"))
+                                top_fid = str(latest_posts[0].get("file_id"))
+                                if top_fid != latest_top_fid_before:
+                                    real_fid = top_fid
+                                    break
+                            # 3. Match by original filename stem (wvids initially sets the file stem as the post title)
+                            if not real_fid:
+                                for p in latest_posts[:3]:
+                                    p_title = (p.get("title") or "").strip()
+                                    if p_title and (p_title == original_stem or original_stem in p_title):
+                                        real_fid = str(p.get("file_id"))
+                                        break
                             if real_fid:
                                 break
                     except Exception as e:
                         add_log("WARNING", f"Попытка {attempt + 1}: ожидание появления публикации на канале: {e}")
-                    await asyncio.sleep(1.2)
+                    await asyncio.sleep(1.5)
+
+            # Fallback if channel indexing is slower than 6 attempts
+            if not real_fid and username:
+                try:
+                    latest_posts = await self.client.get_all_user_posts(username=username, max_pages=1)
+                    if latest_posts and latest_posts[0].get("file_id"):
+                        real_fid = str(latest_posts[0].get("file_id"))
+                except Exception:
+                    pass
 
             target_post_fid = real_fid or str(file_id)
 
-            if description or target_title:
+            title_to_set = target_title if (title or target_title) else None
+            desc_to_set = description if description else None
+
+            if title_to_set or desc_to_set:
                 try:
                     redact_res = await self.client.redact_post(
                         file_id=target_post_fid,
-                        title=target_title if title else None,
-                        description=description if description else None
+                        title=title_to_set,
+                        description=desc_to_set
                     )
                     if redact_res.get("success"):
-                        add_log("SUCCESS", f"✅ Описание успешно установлено для публикации #{target_post_fid}")
+                        applied = []
+                        if redact_res.get("updated_title"): applied.append(f"заголовок: '{title_to_set}'")
+                        if redact_res.get("updated_description"): applied.append("описание")
+                        add_log("SUCCESS", f"✅ Успешно обновлены метаданные для #{target_post_fid} ({', '.join(applied) if applied else 'готово'})")
                     else:
                         err_msg = "; ".join(redact_res.get("errors", ["Неизвестная ошибка"]))
-                        add_log("WARNING", f"⚠️ Предупреждение установки описания для #{target_post_fid}: {err_msg}")
+                        add_log("WARNING", f"⚠️ Предупреждение установки метаданных для #{target_post_fid}: {err_msg}")
                 except Exception as e:
-                    add_log("WARNING", f"Исключение при установке описания: {e}")
+                    add_log("WARNING", f"Исключение при установке метаданных: {e}")
 
             if share_res.status_code == 200 and (share_json.get("success") is True or "success" in share_res.text):
                 success_msg = f"Контент '{target_title}' успешно выложен на wvids.com!"

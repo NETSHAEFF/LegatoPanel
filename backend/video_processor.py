@@ -13,10 +13,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, Tuple, List
 import ctypes
-from ctypes import wintypes
 
 from .config import BASE_DIR, UPLOADS_DIR
-from .storage import get_processing_settings, add_log
+from .storage import get_processing_settings, get_account_processing_settings, add_log
 
 # Fonts directories
 FONTS_DIR = BASE_DIR / "backend" / "fonts"
@@ -162,6 +161,22 @@ def probe_video(ffmpeg_path: str, video_path: Path) -> Dict[str, Any]:
         "has_audio": has_audio,
         "sample_rate": sample_rate,
     }
+
+def estimate_processing_time(duration: float, width: int, height: int, fps: float = 25.0) -> float:
+    """
+    Estimates FFmpeg processing time in seconds based on video frames and resolution.
+    On a typical 4-core CPU with heavy uniqueization filters (noise, rotate, vignette, watermark),
+    throughput is approximately 18-20 MPixels/second.
+    """
+    if duration <= 0:
+        return 0.0
+    w = width if width > 0 else 854
+    h = height if height > 0 else 480
+    f = fps if fps > 0 else 25.0
+    total_frames = duration * f
+    total_megapixels = (total_frames * w * h) / 1_000_000.0
+    est_seconds = total_megapixels / 50.0
+    return round(est_seconds, 1)
 
 def get_font_file_path(font_name: str) -> str:
     """
@@ -344,7 +359,8 @@ def build_watermark_filter(
     settings: Dict[str, Any],
     title: str = "",
     username: str = "",
-    temp_dir: Optional[Path] = None
+    temp_dir: Optional[Path] = None,
+    is_image: bool = False
 ) -> Tuple[Optional[str], Optional[Path]]:
     """
     Builds the FFmpeg drawtext filter string for the watermark.
@@ -437,15 +453,16 @@ def build_watermark_filter(
     else:
         parts.append("box=0")
 
-    # Timing: when watermark appears
-    start_t = float(settings.get("watermark_start_time", 0.0))
-    dur_t = float(settings.get("watermark_duration", 0.0))
-    if start_t > 0 and dur_t > 0:
-        parts.append(f"enable='between(t,{start_t:.2f},{start_t + dur_t:.2f})'")
-    elif start_t > 0:
-        parts.append(f"enable='gte(t,{start_t:.2f})'")
-    elif dur_t > 0:
-        parts.append(f"enable='between(t,0,{dur_t:.2f})'")
+    # Timing: when watermark appears (only for video, not for static images)
+    if not is_image:
+        start_t = float(settings.get("watermark_start_time", 0.0))
+        dur_t = float(settings.get("watermark_duration", 0.0))
+        if start_t > 0 and dur_t > 0:
+            parts.append(f"enable='between(t,{start_t:.2f},{start_t + dur_t:.2f})'")
+        elif start_t > 0:
+            parts.append(f"enable='gte(t,{start_t:.2f})'")
+        elif dur_t > 0:
+            parts.append(f"enable='between(t,0,{dur_t:.2f})'")
 
     filter_str = f"drawtext={':'.join(parts)}"
     return filter_str, temp_txt
@@ -453,7 +470,8 @@ def build_watermark_filter(
 def build_media_watermark_filter(
     settings: Dict[str, Any],
     video_w: int,
-    video_h: int
+    video_h: int,
+    is_image: bool = False
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
     """
     Builds overlay filter configuration for photo/video watermark.
@@ -505,16 +523,16 @@ def build_media_watermark_filter(
         x_expr = f"main_w-overlay_w-{mx}"
         y_expr = f"{my}"
 
-    start_t = float(settings.get("watermark_media_start_time", 2.0))
-    dur_t = float(settings.get("watermark_media_duration", 0.0))
-
     enable_expr = ""
-    if start_t > 0 and dur_t > 0:
-        enable_expr = f":enable='between(t,{start_t:.2f},{start_t + dur_t:.2f})'"
-    elif start_t > 0:
-        enable_expr = f":enable='gte(t,{start_t:.2f})'"
-    elif dur_t > 0:
-        enable_expr = f":enable='between(t,0,{dur_t:.2f})'"
+    if not is_image:
+        start_t = float(settings.get("watermark_media_start_time", 2.0))
+        dur_t = float(settings.get("watermark_media_duration", 0.0))
+        if start_t > 0 and dur_t > 0:
+            enable_expr = f":enable='between(t,{start_t:.2f},{start_t + dur_t:.2f})'"
+        elif start_t > 0:
+            enable_expr = f":enable='gte(t,{start_t:.2f})'"
+        elif dur_t > 0:
+            enable_expr = f":enable='between(t,0,{dur_t:.2f})'"
 
     return str(media_p.resolve()), {
         "target_w": target_w,
@@ -529,11 +547,13 @@ async def process_video_if_enabled(
     input_file: str,
     title: str = "",
     username: str = "",
+    account_id: Optional[int] = None,
+    custom_settings: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[str, int], None]] = None
 ) -> Dict[str, Any]:
     """
     Main automated pipeline:
-    1. Reads watermark & uniqueizer settings.
+    1. Reads watermark & uniqueizer settings (supports per-account overrides).
     2. Burns watermark onto video frames FIRST (before uniqueization).
     3. Executes uniqueization:
        - Duration modification (add seconds / trim seconds / micro-speed)
@@ -548,7 +568,13 @@ async def process_video_if_enabled(
         if progress_callback:
             progress_callback(msg, pct)
 
-    settings = get_processing_settings()
+    if custom_settings:
+        settings = custom_settings
+    elif account_id:
+        settings = get_account_processing_settings(account_id)
+    else:
+        settings = get_processing_settings()
+
     wm_enabled = bool(settings.get("watermark_enabled", True))
     wm_mode = settings.get("watermark_mode", "text")
     uniq_enabled = bool(settings.get("unique_enabled", True))
@@ -572,10 +598,34 @@ async def process_video_if_enabled(
     ffmpeg_bin = find_ffmpeg()
     info = probe_video(ffmpeg_bin, input_p)
     w, h, duration = info["width"], info["height"], info["duration"]
+    fps = info.get("fps", 25.0) or 25.0
 
     if w == 0 or h == 0:
         add_log("WARNING", f"Не удалось определить разрешение {input_p.name}, пропускаем уникализацию")
         return {"processed": False, "reason": "Unknown video dimensions"}
+
+    # Auto-estimation & Pre-render Skip Check
+    max_processing_time = int(settings.get("max_processing_time_sec", 300))
+    skip_if_exceeds = bool(settings.get("skip_if_exceeds_time", True))
+
+    if skip_if_exceeds and max_processing_time > 0 and uniq_enabled:
+        est_seconds = estimate_processing_time(duration, w, h, fps)
+        # If estimated processing time > max_processing_time (5 mins) OR video duration > 360s (6 mins)
+        if est_seconds > max_processing_time or duration > 360:
+            dur_str = f"{int(duration // 60)}м {int(duration % 60)}с"
+            est_str = f"{int(est_seconds // 60)}м {int(est_seconds % 60)}с"
+            reason_msg = (
+                f"Оценочное время уникализации ({est_str}) превышает лимит {max_processing_time // 60} минут. "
+                f"Видео длительностью {dur_str} автоматически пропущено."
+            )
+            add_log("WARNING", f"⏩ [АВТО-ОЦЕНКА] {input_p.name}: {reason_msg}")
+            return {
+                "processed": False,
+                "skipped": True,
+                "reason": reason_msg,
+                "details": f"Оценка: {est_seconds:.0f}с > лимита {max_processing_time}с",
+                "est_seconds": est_seconds
+            }
 
     report("Подготовка фильтров обработки видео (Водяной знак + Уникализация)...", 5)
 
@@ -650,45 +700,20 @@ async def process_video_if_enabled(
                 audio_filters.append(f"atempo={speed:.5f}")
             duration_changed_desc = f"сдвиг скорости {speed}x"
 
-        # Perceptual Hash Jitter (Micro-zoom, slight asymmetric stretch, micro-rotation, crop, vignette, gamma)
+        # Perceptual Hash Jitter (Lightweight micro-crop alters spatial resolution & perceptual hash with near-0 CPU load)
         if settings.get("unique_visual_hash", True):
             crop_delta_w = random.choice([2, 4, 6])
             crop_delta_h = random.choice([2, 4, 6])
             target_w = (w - crop_delta_w) - ((w - crop_delta_w) % 2)
             target_h = (h - crop_delta_h) - ((h - crop_delta_h) % 2)
-
-            # Micro zoom
-            zoom_w = round(random.uniform(1.015, 1.025), 4)
-            zoom_h = round(random.uniform(1.012, 1.022), 4)
-            scaled_w = int(w * zoom_w) - (int(w * zoom_w) % 2)
-            scaled_h = int(h * zoom_h) - (int(w * zoom_h) % 2)
-            unique_video_filters.append(f"scale={scaled_w}:{scaled_h}")
-
-            # Micro rotation (0.35°..0.65°)
-            angle_deg = round(random.choice([-1, 1]) * random.uniform(0.35, 0.65), 3)
-            rad = f"({angle_deg}*PI/180)"
-            unique_video_filters.append(f"rotate={rad}:ow=rotw({rad}):oh=roth({rad})")
-
-            # Center crop
             unique_video_filters.append(f"crop={target_w}:{target_h}")
 
-            # Subtle vignette
-            v_angle = round(random.uniform(0.18, 0.26), 3)
-            unique_video_filters.append(f"vignette=angle={v_angle}")
+        # Dynamic sensor noise (only if explicitly enabled)
+        if settings.get("unique_noise", False):
+            unique_video_filters.append("noise=c0s=2:allf=t")
 
-            # Non-linear gamma & color jitter
-            c_adj = round(random.uniform(1.008, 1.022), 3)
-            b_adj = round(random.uniform(-0.003, 0.005), 3)
-            s_adj = round(random.uniform(0.995, 1.020), 3)
-            g_adj = round(random.choice([random.uniform(0.970, 0.985), random.uniform(1.015, 1.030)]), 3)
-            unique_video_filters.append(f"eq=contrast={c_adj}:brightness={b_adj}:saturation={s_adj}:gamma={g_adj}")
-
-        # Dynamic sensor noise
-        if settings.get("unique_noise", True):
-            unique_video_filters.append("noise=alls=2:allf=t")
-
-        # Audio Content ID Disruption
-        if info["has_audio"] and settings.get("unique_audio_hash", True):
+        # Audio Content ID Disruption (only if explicitly enabled)
+        if info["has_audio"] and settings.get("unique_audio_hash", False):
             sr = info.get("sample_rate", 44100)
             pitch_shift = round(random.choice([random.uniform(0.981, 0.989), random.uniform(1.011, 1.019)]), 4)
             audio_filters.append(f"asetrate={sr}*{pitch_shift},aresample={sr},atempo={1.0 / pitch_shift:.5f}")
@@ -738,6 +763,7 @@ async def process_video_if_enabled(
         "-y",
         "-hide_banner",
         "-loglevel", "error",
+        "-threads", "0",
     ]
 
     # Pre-input duration cut (trim) if active
@@ -751,15 +777,18 @@ async def process_video_if_enabled(
         is_loop_media = is_video_wm or Path(media_path).suffix.lower() in [".gif"]
         if is_loop_media:
             cmd.extend(["-stream_loop", "-1", "-i", media_path])
+            overlay_action = f"{med_cfg['enable_expr']}:shortest=1"
         else:
-            cmd.extend(["-loop", "1", "-i", media_path])
+            # Static image watermark: single input evaluated once, repeated by overlay
+            cmd.extend(["-i", media_path])
+            overlay_action = f"{med_cfg['enable_expr']}:eof_action=repeat"
 
         fc_parts = []
         fc_parts.append(
-            f"[1:v]scale={med_cfg['target_w']}:-2,format=rgba,colorchannelmixer=aa={med_cfg['opacity']:.2f}[wm_med]"
+            f"[1:v]scale={med_cfg['target_w']}:-2:eval=init,format=rgba,colorchannelmixer=aa={med_cfg['opacity']:.2f}[wm_med]"
         )
         fc_parts.append(
-            f"[0:v][wm_med]overlay=x={med_cfg['x_expr']}:y={med_cfg['y_expr']}{med_cfg['enable_expr']}:shortest=1[v_overlay]"
+            f"[0:v][wm_med]overlay=x={med_cfg['x_expr']}:y={med_cfg['y_expr']}{overlay_action}[v_overlay]"
         )
         curr_v = "[v_overlay]"
 
@@ -801,24 +830,29 @@ async def process_video_if_enabled(
     if metadata_args:
         cmd.extend(metadata_args)
 
-    # Encoding configuration
-    preset = settings.get("unique_preset", "fast")
-    crf = str(settings.get("unique_crf", 20))
+    # Encoding configuration (High performance + lightweight CRF 24 for 3x faster Tor network upload)
+    preset = settings.get("unique_preset", "ultrafast")
+    crf = str(settings.get("unique_crf", 24))
     cmd.extend([
         "-c:v", "libx264",
         "-preset", preset,
+        "-tune", "fastdecode",
         "-crf", crf,
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
     ])
 
     if info["has_audio"]:
-        cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        if audio_filters:
+            cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        else:
+            cmd.extend(["-c:a", "copy"])
 
     cmd.append(str(output_path))
 
     report("Рендеринг водяного знака и уникализация видео через FFmpeg...", 12)
     start_t = time.time()
+    proc = None
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -826,7 +860,8 @@ async def process_video_if_enabled(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        _, stderr_data = await proc.communicate()
+        timeout_limit = float(max_processing_time) if max_processing_time > 0 else 300.0
+        _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=timeout_limit)
 
         if proc.returncode != 0:
             err_msg = stderr_data.decode("utf-8", errors="ignore")
@@ -862,6 +897,27 @@ async def process_video_if_enabled(
             "details": details
         }
 
+    except asyncio.TimeoutError:
+        if proc:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        msg = f"Уникализация видео превысила лимит {int(timeout_limit // 60)} минут (таймаут). Видео пропущено."
+        add_log("WARNING", f"⏩ [ТАЙМАУТ FFmpeg] {input_p.name}: {msg}")
+        return {
+            "processed": False,
+            "skipped": True,
+            "reason": msg,
+            "details": f"Превышен таймаут {int(timeout_limit)}с"
+        }
+
     except Exception as e:
         add_log("ERROR", f"Исключение при уникализации видео: {str(e)}")
         return {"processed": False, "error": str(e)}
@@ -874,9 +930,255 @@ async def process_video_if_enabled(
             except Exception:
                 pass
 
-async def run_test_processing(video_path: Optional[str] = None) -> Dict[str, Any]:
+async def process_image_if_enabled(
+    input_file: str,
+    title: str = "",
+    username: str = "",
+    account_id: Optional[int] = None,
+    custom_settings: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[str, int], None]] = None
+) -> Dict[str, Any]:
+    """
+    Main automated pipeline for photos/images:
+    1. Reads watermark & uniqueizer settings (supports per-account overrides).
+    2. Burns watermark onto image (supports media/photo/video watermark and text watermark).
+    3. If uniqueization is enabled:
+       - Visual hash jitter (micro-crop)
+       - Dynamic noise (if enabled)
+       - Strips EXIF metadata & spoofs smartphone device profile
+       - Cross-platform file timestamps
+    4. Outputs new processed image for upload.
+    """
+    def report(msg: str, pct: int):
+        if progress_callback:
+            progress_callback(msg, pct)
+
+    if custom_settings:
+        settings = custom_settings
+    elif account_id:
+        settings = get_account_processing_settings(account_id)
+    else:
+        settings = get_processing_settings()
+
+    wm_enabled = bool(settings.get("watermark_enabled", True))
+    wm_mode = settings.get("watermark_mode", "text")
+    uniq_enabled = bool(settings.get("unique_enabled", False))
+
+    input_p = Path(input_file).resolve()
+    if not input_p.is_file():
+        return {"processed": False, "error": f"Файл не найден: {input_file}"}
+
+    # Evaluate active watermark components
+    if not wm_enabled or wm_mode == "none":
+        has_text_wm = False
+        has_media_wm = False
+    else:
+        has_text_wm = wm_mode in ("both", "text")
+        has_media_wm = wm_mode in ("both", "media")
+
+    # If both watermark and uniqueizer are disabled, skip
+    if not has_text_wm and not has_media_wm and not uniq_enabled:
+        return {"processed": False, "reason": "Both watermark and uniqueizer disabled"}
+
+    ffmpeg_bin = find_ffmpeg()
+    info = probe_video(ffmpeg_bin, input_p)
+    w, h = info.get("width", 0), info.get("height", 0)
+
+    # Fallback to PIL to probe dimensions if probe_video didn't catch it
+    if w == 0 or h == 0:
+        try:
+            from PIL import Image
+            with Image.open(input_p) as im:
+                w, h = im.size
+        except Exception:
+            pass
+
+    if w == 0 or h == 0:
+        add_log("WARNING", f"Не удалось определить разрешение фото {input_p.name}, пропускаем обработку")
+        return {"processed": False, "reason": "Unknown image dimensions"}
+
+    report("Подготовка водяного знака для фото...", 10)
+
+    # 1. WATERMARKS (is_image=True ensures watermarks appear without video timing constraints)
+    media_path = None
+    med_cfg = None
+    is_video_wm = False
+    if has_media_wm:
+        media_path, med_cfg, is_video_wm = build_media_watermark_filter(settings, w, h, is_image=True)
+        if not media_path:
+            has_media_wm = False
+
+    wm_filter = None
+    temp_txt_file = None
+    if has_text_wm:
+        wm_filter, temp_txt_file = build_watermark_filter(
+            settings=settings,
+            title=title,
+            username=username,
+            temp_dir=UPLOADS_DIR,
+            is_image=True
+        )
+        if not wm_filter:
+            has_text_wm = False
+
+    # 2. UNIQUEIZATION / VISUAL TRANSFORMS
+    unique_image_filters: List[str] = []
+    if uniq_enabled:
+        if settings.get("unique_visual_hash", True):
+            crop_delta_w = random.choice([2, 4])
+            crop_delta_h = random.choice([2, 4])
+            cw = (w - crop_delta_w) - ((w - crop_delta_w) % 2)
+            ch = (h - crop_delta_h) - ((h - crop_delta_h) % 2)
+            if cw > 10 and ch > 10:
+                unique_image_filters.append(f"crop={cw}:{ch}")
+
+        if settings.get("unique_noise", False):
+            unique_image_filters.append("noise=c0s=2:allf=t")
+
+    # 3. METADATA & SMARTPHONE SPOOFING
+    metadata_args: List[str] = []
+    device_id = settings.get("unique_device_profile", "random")
+    if device_id == "random":
+        chosen_device = random.choice(DEVICE_PROFILES)
+    else:
+        chosen_device = next((d for d in DEVICE_PROFILES if d["id"] == device_id), DEVICE_PROFILES[0])
+
+    random_days = random.randint(3, 75)
+    random_secs = random.randint(0, 86400)
+    shoot_date = datetime.now() - timedelta(days=random_days, seconds=random_secs)
+
+    if settings.get("unique_metadata", True):
+        metadata_args = [
+            "-map_metadata", "-1",
+            "-metadata", f"make={chosen_device['make']}",
+            "-metadata", f"model={chosen_device['model']}",
+            "-metadata", f"software={chosen_device['software']}",
+            "-metadata", f"date={shoot_date.strftime('%Y-%m-%d %H:%M:%S')}",
+        ]
+
+    # Destination filename & extension
+    in_ext = input_p.suffix.lower()
+    if in_ext == ".png":
+        out_ext = ".png"
+    else:
+        out_ext = ".jpg"
+
+    unique_suffix = f"proc_{int(time.time())}_{uuid.uuid4().hex[:6]}{out_ext}"
+    output_path = UPLOADS_DIR / unique_suffix
+
+    # Build FFmpeg command
+    cmd: List[str] = [
+        ffmpeg_bin,
+        "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", str(input_p)
+    ]
+
+    if has_media_wm and media_path and med_cfg:
+        cmd.extend(["-i", media_path])
+        fc_parts = [
+            f"[1:v]scale={med_cfg['target_w']}:-2:eval=init,format=rgba,colorchannelmixer=aa={med_cfg['opacity']:.2f}[wm_med]",
+            f"[0:v][wm_med]overlay=x={med_cfg['x_expr']}:y={med_cfg['y_expr']}[v_overlay]"
+        ]
+        curr_v = "[v_overlay]"
+
+        if has_text_wm and wm_filter:
+            fc_parts.append(f"{curr_v}{wm_filter}[v_txt]")
+            curr_v = "[v_txt]"
+
+        if unique_image_filters:
+            fc_parts.append(f"{curr_v}{','.join(unique_image_filters)}[outv]")
+        else:
+            fc_parts.append(f"{curr_v}null[outv]")
+
+        cmd.extend(["-filter_complex", ";".join(fc_parts), "-map", "[outv]"])
+
+    else:
+        image_filters: List[str] = []
+        if has_text_wm and wm_filter:
+            image_filters.append(wm_filter)
+        if unique_image_filters:
+            image_filters.extend(unique_image_filters)
+
+        if image_filters:
+            cmd.extend(["-vf", ",".join(image_filters)])
+
+    if metadata_args:
+        cmd.extend(metadata_args)
+
+    cmd.extend(["-frames:v", "1", "-update", "1"])
+    if out_ext == ".png":
+        cmd.extend(["-c:v", "png"])
+    else:
+        cmd.extend(["-q:v", "2"])
+
+    cmd.append(str(output_path))
+
+    report("Рендеринг водяного знака на фото...", 20)
+    start_t = time.time()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+
+        if proc.returncode != 0:
+            err_msg = stderr_data.decode("utf-8", errors="ignore")
+            add_log("ERROR", f"Ошибка FFmpeg при обработке фото: {err_msg[:300]}")
+            return {"processed": False, "error": f"FFmpeg failed: {err_msg[:200]}"}
+
+        set_file_timestamps(output_path, shoot_date)
+
+        wm_desc_parts = []
+        if has_text_wm and wm_filter:
+            wm_desc_parts.append("Текст")
+        if has_media_wm and media_path:
+            wm_desc_parts.append("Медиа (" + ("Видео" if is_video_wm else "Фото") + ")")
+        wm_status = " + ".join(wm_desc_parts) if wm_desc_parts else "Выкл"
+
+        elapsed = round(time.time() - start_t, 2)
+        details = (
+            f"Водяной знак: {wm_status}; "
+            f"Устройство: {chosen_device['model']}; "
+            f"Время обработки: {elapsed}с"
+        )
+        report(f"Фото готово к выгрузке ({elapsed}с)", 25)
+
+        return {
+            "processed": True,
+            "output_path": str(output_path),
+            "original_path": str(input_p),
+            "device": chosen_device["model"],
+            "elapsed_seconds": elapsed,
+            "details": details
+        }
+
+    except asyncio.TimeoutError:
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        return {"processed": False, "error": "Таймаут обработки фото"}
+
+    except Exception as e:
+        add_log("ERROR", f"Исключение при обработке фото: {str(e)}")
+        return {"processed": False, "error": str(e)}
+
+    finally:
+        if temp_txt_file and temp_txt_file.exists():
+            try:
+                temp_txt_file.unlink()
+            except Exception:
+                pass
+
+async def run_test_processing(video_path: Optional[str] = None, account_id: Optional[int] = None) -> Dict[str, Any]:
     """
     Executes a benchmark test run of watermark & uniqueizer with current settings.
+    If an image path is given, processes the image.
     If no video is given, generates a 2.5-second test video.
     Returns before/after metrics (duration, pHash distance, size, processing time).
     """
@@ -885,6 +1187,45 @@ async def run_test_processing(video_path: Optional[str] = None) -> Dict[str, Any
 
     if video_path and Path(video_path).is_file():
         test_file = Path(video_path)
+        ext = test_file.suffix.lower()
+        if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+            # Image benchmark run
+            start_t = time.time()
+            res = await process_image_if_enabled(
+                input_file=str(test_file),
+                title="TestPhoto",
+                username="preview_user",
+                account_id=account_id
+            )
+            elapsed = round(time.time() - start_t, 2)
+            if not res.get("processed"):
+                return {"success": False, "error": res.get("error", "Обработка фото не вернула результат")}
+
+            out_file = Path(res["output_path"])
+            orig_size = test_file.stat().st_size
+            new_size = out_file.stat().st_size if out_file.exists() else 0
+            if out_file.exists():
+                try:
+                    out_file.unlink()
+                except Exception:
+                    pass
+
+            return {
+                "success": True,
+                "elapsed_seconds": elapsed,
+                "orig_duration": 0,
+                "new_duration": 0,
+                "duration_delta": 0,
+                "orig_size_bytes": orig_size,
+                "new_size_bytes": new_size,
+                "orig_phash": "",
+                "new_phash": "",
+                "phash_hamming_distance": 0,
+                "phash_difference_pct": 0,
+                "device_profile": res.get("device", "Unknown"),
+                "duration_desc": "Фото",
+                "details": res.get("details", "")
+            }
     else:
         # Generate synthetic 2.5s clip with video + sine audio
         temp_test_input = UPLOADS_DIR / f"test_sample_{uuid.uuid4().hex[:6]}.mp4"
@@ -908,7 +1249,8 @@ async def run_test_processing(video_path: Optional[str] = None) -> Dict[str, Any
     res = await process_video_if_enabled(
         input_file=str(test_file),
         title="TestVideo",
-        username="preview_user"
+        username="preview_user",
+        account_id=account_id
     )
     elapsed = round(time.time() - start_t, 2)
 

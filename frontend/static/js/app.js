@@ -20,10 +20,12 @@ document.addEventListener("DOMContentLoaded", () => {
     loadBulkRedactStatus();
     loadProcessingSettings();
     initProcessingStudio();
+    initPopularDownloader();
     // Periodic refresh
     setInterval(loadTorStatus, 30000);
     setInterval(loadBatchStatus, 2500);
     setInterval(loadBulkRedactStatus, 2000);
+    setInterval(loadPopularStatus, 2000);
 });
 
 // --- Toast Notifications ---
@@ -41,10 +43,41 @@ function showToast(message, type = "info") {
     }, 4000);
 }
 
-// --- Tabs Management ---
+// --- Tabs Management & Navigation ---
+const TAB_SECTION_NAMES = {
+    "tab-dashboard": "Обзор & Аналитика",
+    "tab-upload": "Очередь авто-выгрузки",
+    "tab-processing": "Студия водяного знака",
+    "tab-redact": "Пакетный редактор постов",
+    "tab-popular": "Парсер Популярного",
+    "tab-antidetect": "Tor Сеть & Защита",
+    "tab-auth": "Куки & Аккаунты",
+    "tab-account": "Профиль & Никнейм",
+    "tab-logs": "Системный журнал"
+};
+
 function initTabs() {
     const tabBtns = document.querySelectorAll(".tab-btn");
     const tabContents = document.querySelectorAll(".tab-content");
+    const sectionTitleElem = document.getElementById("headerCurrentSectionTitle");
+    const sidebarToggle = document.getElementById("sidebarToggle");
+    const appSidebar = document.getElementById("appSidebar");
+    const sidebarBackdrop = document.getElementById("sidebarBackdrop");
+
+    // Mobile drawer toggle
+    if (sidebarToggle && appSidebar) {
+        sidebarToggle.addEventListener("click", () => {
+            appSidebar.classList.toggle("open");
+            if (sidebarBackdrop) sidebarBackdrop.classList.toggle("active");
+        });
+    }
+
+    if (sidebarBackdrop && appSidebar) {
+        sidebarBackdrop.addEventListener("click", () => {
+            appSidebar.classList.remove("open");
+            sidebarBackdrop.classList.remove("active");
+        });
+    }
 
     tabBtns.forEach(btn => {
         btn.addEventListener("click", () => {
@@ -56,6 +89,17 @@ function initTabs() {
             const panel = document.getElementById(target);
             if (panel) {
                 panel.classList.add("active");
+
+                if (sectionTitleElem && TAB_SECTION_NAMES[target]) {
+                    sectionTitleElem.textContent = TAB_SECTION_NAMES[target];
+                }
+
+                // Close mobile sidebar if open
+                if (window.innerWidth <= 1024 && appSidebar) {
+                    appSidebar.classList.remove("open");
+                    if (sidebarBackdrop) sidebarBackdrop.classList.remove("active");
+                }
+
                 if (target === "tab-dashboard" && chartInstance) {
                     chartInstance.resize();
                 }
@@ -71,6 +115,10 @@ function initTabs() {
                 }
                 if (target === "tab-redact") {
                     loadBulkRedactStatus();
+                }
+                if (target === "tab-popular") {
+                    loadPopularStatus();
+                    loadPopularFiles();
                 }
                 if (target === "tab-processing") {
                     updateLivePreview();
@@ -159,6 +207,10 @@ function updateHeaderStatus(account) {
 
         userEl.textContent = `@${account.username}`;
         uidEl.textContent = `(UID: ${account.uid})`;
+        const dashAccUser = document.getElementById("dashAccountUsername");
+        if (dashAccUser) dashAccUser.textContent = `@${account.username}`;
+        const dashAccUid = document.getElementById("dashAccountUid");
+        if (dashAccUid) dashAccUid.textContent = account.uid || "-";
         if (curNick) curNick.value = account.username;
         if (profLink) {
             profLink.href = `https://wvids.com/@${account.username}`;
@@ -206,14 +258,14 @@ function renderViewsChart(labels, series) {
             datasets: [{
                 label: "Просмотры",
                 data: finalSeries,
-                borderColor: "#06b6d4",
-                borderWidth: 3,
-                tension: 0.35,
+                borderColor: "#6366f1",
+                borderWidth: 2,
+                tension: 0.3,
                 fill: true,
-                backgroundColor: "rgba(6, 182, 212, 0.12)",
-                pointRadius: 4,
-                pointBackgroundColor: "#06b6d4",
-                pointHoverRadius: 6,
+                backgroundColor: "rgba(99, 102, 241, 0.08)",
+                pointRadius: 3,
+                pointBackgroundColor: "#6366f1",
+                pointHoverRadius: 5,
                 pointHoverBackgroundColor: "#ffffff"
             }]
         },
@@ -223,23 +275,23 @@ function renderViewsChart(labels, series) {
             plugins: {
                 legend: { display: false },
                 tooltip: {
-                    backgroundColor: "#111726",
+                    backgroundColor: "#141822",
                     titleColor: "#94a3b8",
                     bodyColor: "#ffffff",
-                    borderColor: "rgba(6, 182, 212, 0.4)",
+                    borderColor: "rgba(99, 102, 241, 0.3)",
                     borderWidth: 1,
-                    padding: 10,
+                    padding: 9,
                     displayColors: false
                 }
             },
             scales: {
                 x: {
-                    grid: { color: "rgba(255, 255, 255, 0.05)" },
-                    ticks: { color: "#64748b", font: { size: 11 } }
+                    grid: { color: "rgba(255, 255, 255, 0.04)" },
+                    ticks: { color: "#64748b", font: { family: "'JetBrains Mono', monospace", size: 10 } }
                 },
                 y: {
-                    grid: { color: "rgba(255, 255, 255, 0.05)" },
-                    ticks: { color: "#64748b", font: { size: 11 } },
+                    grid: { color: "rgba(255, 255, 255, 0.04)" },
+                    ticks: { color: "#64748b", font: { family: "'JetBrains Mono', monospace", size: 10 } },
                     beginAtZero: true
                 }
             }
@@ -475,8 +527,15 @@ function initEventListeners() {
     // Batch Auto-Publisher Controls
     document.getElementById("btnRefreshBatchFiles")?.addEventListener("click", loadBatchFiles);
     document.getElementById("btnStartBatch")?.addEventListener("click", startBatchUpload);
+    document.getElementById("btnSaveBatchSettings")?.addEventListener("click", () => saveBatchSettings(true));
     document.getElementById("btnStopBatch")?.addEventListener("click", stopBatchUpload);
-    document.getElementById("batchFolderInput")?.addEventListener("change", loadBatchFiles);
+    document.getElementById("batchFolderInput")?.addEventListener("change", () => {
+        saveBatchSettings(false);
+        loadBatchFiles();
+    });
+    ["batchIntervalInput", "batchTitleInput", "batchDescInput", "batchLoopInput"].forEach(id => {
+        document.getElementById(id)?.addEventListener("change", () => saveBatchSettings(false));
+    });
 
     // Tor Network Controls
     document.getElementById("headerTorChip")?.addEventListener("click", () => {
@@ -494,6 +553,7 @@ function initEventListeners() {
     document.getElementById("btnStartStandaloneTor")?.addEventListener("click", startStandaloneTor);
     document.getElementById("btnStopStandaloneTor")?.addEventListener("click", stopStandaloneTor);
     document.getElementById("btnDetectTorPort")?.addEventListener("click", detectTorPort);
+    document.getElementById("btnTorNewIdentity")?.addEventListener("click", torNewIdentity);
     document.getElementById("btnTestTorCircuit")?.addEventListener("click", testTorCircuit);
     document.getElementById("btnSaveTorSettings")?.addEventListener("click", saveTorSettings);
 
@@ -537,6 +597,8 @@ function initEventListeners() {
 }
 
 // --- Accounts List ---
+let cachedAccounts = [];
+
 async function loadAccounts() {
     const container = document.getElementById("accountsListContainer");
     if (!container) return;
@@ -546,6 +608,7 @@ async function loadAccounts() {
         const data = await res.json();
         const accounts = data.accounts || [];
         const activeId = data.active_account_id;
+        cachedAccounts = accounts;
 
         if (accounts.length === 0) {
             container.innerHTML = `
@@ -568,7 +631,7 @@ async function loadAccounts() {
                 <div class="${cardClass}" style="${borderStyle}">
                     <div style="flex: 1;">
                         <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-wrap: wrap;">
-                            <strong style="color: ${isSuspended ? '#fca5a5' : '#fff'};">@${acc.username || 'unknown'}</strong>
+                            <strong style="color: ${isSuspended ? '#fca5a5' : '#fff'}; font-size: 0.95rem;">@${acc.username || 'unknown'}</strong>
                             ${isActive ? '<span class="brand-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border-color: rgba(16, 185, 129, 0.4);">Активен</span>' : ''}
                             ${isSuspended ? `<span class="suspended-badge" title="${acc.suspension_reason || 'Account suspended'}">⛔ Account suspended</span>` : ''}
                         </div>
@@ -593,6 +656,7 @@ async function loadAccounts() {
                 </div>
             `;
         }).join("");
+
     } catch (err) {
         console.error("Failed to load accounts:", err);
     }
@@ -840,6 +904,8 @@ async function loadTorStatus() {
             if (portVal) portVal.textContent = `127.0.0.1:${st.port}`;
             if (latencyVal) latencyVal.textContent = `${st.latency_ms} мс`;
             if (uploadRoute) uploadRoute.textContent = `127.0.0.1:${st.port}`;
+            const dashTorGate = document.getElementById("dashTorGateText");
+            if (dashTorGate) dashTorGate.textContent = `127.0.0.1:${st.port} (Active)`;
         } else {
             if (chipDot) chipDot.className = "tor-dot";
             if (chipText) chipText.textContent = "Tor: Отключен";
@@ -852,11 +918,36 @@ async function loadTorStatus() {
                 isTorVal.style.color = "var(--accent-red)";
                 isTorVal.textContent = "Нет связи";
             }
-            if (portVal) portVal.textContent = `127.0.0.1:${st.port || 9050}`;
+            if (portVal) portVal.textContent = `127.0.0.1:${st.port || 9150}`;
             if (latencyVal) latencyVal.textContent = "-";
         }
     } catch (err) {
         console.error("Failed to load Tor status:", err);
+    }
+}
+
+async function torNewIdentity() {
+    const btn = document.getElementById("btnTorNewIdentity");
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Смена цепи...";
+    }
+    try {
+        const res = await fetch("/api/tor/new-identity", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.message || "Новая цепь Tor успешно создана", "success");
+            await loadTorStatus();
+        } else {
+            showToast(data.error || "Не удалось сменить цепь Tor", "error");
+        }
+    } catch (e) {
+        showToast("Ошибка смены цепи: " + e.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Сменить Exit IP";
+        }
     }
 }
 
@@ -1036,14 +1127,50 @@ async function loadBatchSettings() {
             const intervalInput = document.getElementById("batchIntervalInput");
             const titleInput = document.getElementById("batchTitleInput");
             const descInput = document.getElementById("batchDescInput");
+            const loopInput = document.getElementById("batchLoopInput");
 
-            if (folderInput && data.folder) folderInput.value = data.folder;
-            if (intervalInput && data.interval_min) intervalInput.value = data.interval_min;
-            if (titleInput && data.title) titleInput.value = data.title;
-            if (descInput && data.desc) descInput.value = data.desc;
+            if (folderInput && data.folder !== undefined) folderInput.value = data.folder;
+            if (intervalInput && data.interval_min !== undefined) intervalInput.value = data.interval_min;
+            if (titleInput && data.title !== undefined) titleInput.value = data.title;
+            if (descInput && data.desc !== undefined) descInput.value = data.desc;
+            if (loopInput && data.loop_mode !== undefined) loopInput.checked = !!data.loop_mode;
         }
     } catch (err) {
         console.error("Failed to load batch settings:", err);
+    }
+}
+
+async function saveBatchSettings(showNotification = false) {
+    const folder = document.getElementById("batchFolderInput")?.value.trim() || "videos";
+    const interval = parseFloat(document.getElementById("batchIntervalInput")?.value) || 5;
+    const title = document.getElementById("batchTitleInput")?.value.trim() || "";
+    const desc = document.getElementById("batchDescInput")?.value.trim() || "";
+    const loopMode = document.getElementById("batchLoopInput") ? document.getElementById("batchLoopInput").checked : true;
+
+    try {
+        const res = await fetch("/api/batch/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                folder: folder,
+                interval_min: interval,
+                title: title,
+                desc: desc,
+                loop_mode: loopMode
+            })
+        });
+        const data = await res.json();
+        if (showNotification) {
+            if (res.ok && data.success) {
+                showToast("✓ Настройки очереди сохранены", "success");
+            } else {
+                showToast(data.detail || data.error || "Ошибка сохранения настроек", "error");
+            }
+        }
+    } catch (err) {
+        if (showNotification) {
+            showToast("Сбой сохранения: " + err.message, "error");
+        }
     }
 }
 
@@ -1080,10 +1207,14 @@ async function loadBatchFiles() {
 
         tbody.innerHTML = files.map((f, i) => {
             let statusBadge = '';
-            if (f.status === 'uploaded') {
+            if (f.status === 'uploading') {
+                statusBadge = '<span class="brand-badge" style="background: rgba(139, 92, 246, 0.25); color: #c084fc; border-color: rgba(139, 92, 246, 0.5);">🚀 Выгружается...</span>';
+            } else if (f.status === 'uploaded') {
                 statusBadge = '<span class="brand-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border-color: transparent;">✅ Опубликовано</span>';
             } else if (f.status === 'duplicate') {
                 statusBadge = '<span class="brand-badge" style="background: rgba(245, 158, 11, 0.2); color: var(--accent-amber); border-color: transparent;">⏩ Дубликат (already exists)</span>';
+            } else if (f.status === 'skipped') {
+                statusBadge = '<span class="brand-badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3);">⏩ Пропущено (>5 мин)</span>';
             } else {
                 statusBadge = '<span class="brand-badge" style="background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); border-color: transparent;">⏳ Ожидает очереди</span>';
             }
@@ -1110,6 +1241,7 @@ async function loadBatchStatus() {
         const st = data.status || {};
 
         const statusEl = document.getElementById("batchStatusText");
+        const cycleEl = document.getElementById("batchCycleCount");
         const totalEl = document.getElementById("batchTotalCount");
         const successEl = document.getElementById("batchSuccessCount");
         const dupEl = document.getElementById("batchDuplicateCount");
@@ -1117,6 +1249,18 @@ async function loadBatchStatus() {
         const msgBox = document.getElementById("batchMessageBox");
         const startBtn = document.getElementById("btnStartBatch");
         const stopBtn = document.getElementById("btnStopBatch");
+
+        if (cycleEl) {
+            const cycleNum = st.cycle || 1;
+            const loopTag = st.loop_mode ? ' 🔄' : '';
+            const accTag = (st.accounts_count && st.accounts_count > 1) ? ` [${st.accounts_count} акк]` : '';
+            cycleEl.textContent = `Круг #${cycleNum}${loopTag}${accTag}`;
+            const dashBatchCycle = document.getElementById("dashBatchCycleText");
+            if (dashBatchCycle) dashBatchCycle.textContent = `Круг #${cycleNum} (${st.loop_mode ? "Бесконечный" : "1 круг"})${accTag}`;
+        }
+
+        const dashBatchStatus = document.getElementById("dashBatchStatusText");
+        if (dashBatchStatus) dashBatchStatus.textContent = st.is_running ? (st.current_file || "Активна") : "Ожидание запуска";
 
         if (totalEl && st.total_files !== undefined && st.total_files > 0) {
             totalEl.textContent = st.total_files;
@@ -1132,7 +1276,8 @@ async function loadBatchStatus() {
         }
 
         if (msgBox && st.last_message) {
-            msgBox.innerHTML = `<strong>Текущее действие:</strong> ${st.last_message}`;
+            const curAccBadge = st.current_account_username ? `<span style="background: rgba(56, 189, 248, 0.15); color: var(--accent-cyan); padding: 2px 6px; border-radius: 4px; font-weight: 700; margin-right: 4px;">@${st.current_account_username}</span> ` : '';
+            msgBox.innerHTML = `<strong>Текущее действие:</strong> ${curAccBadge}${st.last_message}`;
         }
 
         if (st.is_running) {
@@ -1142,12 +1287,14 @@ async function loadBatchStatus() {
             if (st.state === "waiting_delay") {
                 if (statusEl) {
                     statusEl.style.color = "var(--accent-amber)";
-                    statusEl.textContent = `⏳ Пауза перед следующим (${st.delay_remaining} с)`;
+                    statusEl.textContent = `⏳ Пауза (Круг #${st.cycle || 1}): ${st.delay_remaining} с`;
                 }
             } else {
                 if (statusEl) {
                     statusEl.style.color = "var(--accent-green)";
-                    statusEl.textContent = `🚀 Выгрузка: ${st.current_file || 'обработка'}`;
+                    const cycleTxt = st.cycle ? `[Круг #${st.cycle}] ` : '';
+                    const accTxt = st.current_account_username ? `[@${st.current_account_username}] ` : '';
+                    statusEl.textContent = `🚀 ${cycleTxt}${accTxt}Выгрузка: ${st.current_file || 'обработка'}`;
                 }
             }
         } else {
@@ -1168,6 +1315,7 @@ async function startBatchUpload() {
     const interval = parseFloat(document.getElementById("batchIntervalInput")?.value) || 5;
     const title = document.getElementById("batchTitleInput")?.value.trim() || "";
     const desc = document.getElementById("batchDescInput")?.value.trim() || "";
+    const loopMode = document.getElementById("batchLoopInput") ? document.getElementById("batchLoopInput").checked : true;
 
     const btn = document.getElementById("btnStartBatch");
     if (btn) btn.disabled = true;
@@ -1180,7 +1328,8 @@ async function startBatchUpload() {
                 folder_path: folder,
                 delay_minutes: interval,
                 title_template: title,
-                desc_template: desc
+                desc_template: desc,
+                loop_mode: loopMode
             })
         });
         const data = await res.json();
@@ -1479,6 +1628,232 @@ async function loadBulkRedactStatus() {
     }
 }
 
+// ==========================================================================
+// Popular Videos Downloader Module
+// ==========================================================================
+
+function initPopularDownloader() {
+    const btnScan = document.getElementById("btnScanPopular");
+    const btnStart = document.getElementById("btnStartPopularDownload");
+    const btnStop = document.getElementById("btnStopPopularDownload");
+    const btnRefresh = document.getElementById("btnRefreshPopFiles");
+
+    if (btnScan) {
+        btnScan.addEventListener("click", scanPopularVideos);
+    }
+    if (btnStart) {
+        btnStart.addEventListener("click", startPopularDownload);
+    }
+    if (btnStop) {
+        btnStop.addEventListener("click", stopPopularDownload);
+    }
+    if (btnRefresh) {
+        btnRefresh.addEventListener("click", loadPopularFiles);
+    }
+
+    loadPopularStatus();
+    loadPopularFiles();
+}
+
+async function scanPopularVideos() {
+    const minViews = parseInt(document.getElementById("popMinViewsInput")?.value || "0", 10) || 0;
+    const maxPages = parseInt(document.getElementById("popMaxPagesInput")?.value || "0", 10) || 0;
+    const btnScan = document.getElementById("btnScanPopular");
+    const tableBody = document.getElementById("popVideosTableBody");
+    const countBadge = document.getElementById("popFoundCountBadge");
+    const matchesBadge = document.getElementById("popMatchesBadge");
+    const pagesBadge = document.getElementById("popPagesBadge");
+
+    if (btnScan) {
+        btnScan.disabled = true;
+        btnScan.innerHTML = `<span class="spinner-sm"></span> Сканирование...`;
+    }
+
+    if (tableBody) {
+        tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--accent-cyan); padding: 2rem;">🔍 Сканирование страниц раздела «Популярное»...</td></tr>`;
+    }
+
+    try {
+        const res = await fetch(`/api/popular/scan?min_views=${minViews}&max_pages=${maxPages}`);
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+            const list = data.videos || [];
+            showToast(`🔥 Найдено ${list.length} видео с просмотрами >= ${minViews.toLocaleString()}`, "success");
+
+            if (countBadge) countBadge.textContent = `${list.length} видео`;
+            if (matchesBadge) matchesBadge.textContent = list.length;
+            if (pagesBadge) pagesBadge.textContent = data.total_pages || (maxPages > 0 ? maxPages : "Все");
+
+            renderPopularVideosTable(list);
+        } else {
+            showToast(data.detail || "Ошибка сканирования популярного", "error");
+        }
+    } catch (err) {
+        showToast("Ошибка запроса: " + err.message, "error");
+    } finally {
+        if (btnScan) {
+            btnScan.disabled = false;
+            btnScan.innerHTML = `
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                Предпросмотр (Скан)
+            `;
+        }
+    }
+}
+
+function renderPopularVideosTable(videos) {
+    const tableBody = document.getElementById("popVideosTableBody");
+    if (!tableBody) return;
+
+    if (!videos || videos.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Видео с заданными параметрами не найдено.</td></tr>`;
+        return;
+    }
+
+    tableBody.innerHTML = videos.map((v, idx) => {
+        const durM = Math.floor((v.duration || 0) / 60);
+        const durS = (v.duration || 0) % 60;
+        const durStr = `${String(durM).padStart(2, "0")}:${String(durS).padStart(2, "0")}`;
+        const titleSafe = (v.title || "Без названия").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const viewsStr = (v.views || 0).toLocaleString();
+
+        return `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <td style="padding: 0.5rem; color: var(--text-muted); font-size: 0.72rem;">${idx + 1}</td>
+                <td style="padding: 0.5rem; font-weight: 500; color: var(--text-primary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${titleSafe}
+                    <div style="font-size: 0.68rem; color: var(--text-muted);">FID: ${v.file_id}</div>
+                </td>
+                <td style="padding: 0.5rem; text-align: right; color: #ff6b6b; font-weight: bold;">${viewsStr}</td>
+                <td style="padding: 0.5rem; text-align: center; color: var(--text-secondary); font-family: monospace;">${durStr}</td>
+                <td style="padding: 0.5rem; text-align: center; color: var(--accent-cyan);">${v.page || 1}</td>
+                <td style="padding: 0.5rem; text-align: center;">
+                    <a href="${v.post_url}" target="_blank" style="color: var(--accent-cyan); text-decoration: none;" title="Открыть">↗</a>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
+async function startPopularDownload() {
+    const minViews = parseInt(document.getElementById("popMinViewsInput")?.value || "0", 10) || 0;
+    const maxPages = parseInt(document.getElementById("popMaxPagesInput")?.value || "0", 10) || 0;
+    const folder = document.getElementById("popFolderInput")?.value?.trim() || "video";
+    const limit = parseInt(document.getElementById("popLimitInput")?.value || "0", 10) || 0;
+    const startBtn = document.getElementById("btnStartPopularDownload");
+
+    if (startBtn) startBtn.disabled = true;
+
+    try {
+        const res = await fetch("/api/popular/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                min_views: minViews,
+                max_pages: maxPages,
+                folder: folder,
+                limit: limit
+            })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast(`📥 ${data.message}`, "success");
+            loadPopularStatus();
+        } else {
+            showToast(data.detail || data.error || "Не удалось запустить скачивание", "error");
+        }
+    } catch (err) {
+        showToast("Сбой запуска: " + err.message, "error");
+    } finally {
+        if (startBtn) startBtn.disabled = false;
+    }
+}
+
+async function stopPopularDownload() {
+    try {
+        const res = await fetch("/api/popular/stop", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("⏹️ Процесс скачивания остановлен", "info");
+            loadPopularStatus();
+        }
+    } catch (err) {
+        showToast("Ошибка остановки: " + err.message, "error");
+    }
+}
+
+async function loadPopularStatus() {
+    try {
+        const res = await fetch("/api/popular/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        const st = data.status;
+        if (!st) return;
+
+        const progContainer = document.getElementById("popProgressContainer");
+        const statusText = document.getElementById("popStatusText");
+        const percentText = document.getElementById("popPercentText");
+        const progFill = document.getElementById("popProgressFill");
+        const startBtn = document.getElementById("btnStartPopularDownload");
+        const stopBtn = document.getElementById("btnStopPopularDownload");
+
+        const pagesBadge = document.getElementById("popPagesBadge");
+        const matchesBadge = document.getElementById("popMatchesBadge");
+        const downloadedBadge = document.getElementById("popDownloadedBadge");
+        const skippedBadge = document.getElementById("popSkippedBadge");
+
+        if (pagesBadge) pagesBadge.textContent = st.total_pages_scanned || st.current_page || 0;
+        if (matchesBadge) matchesBadge.textContent = st.matching_count || 0;
+        if (downloadedBadge) downloadedBadge.textContent = st.downloaded_count || 0;
+        if (skippedBadge) skippedBadge.textContent = st.skipped_count || 0;
+
+        if (st.is_running || st.is_scanning) {
+            if (progContainer) progContainer.style.display = "block";
+            if (statusText) statusText.textContent = st.status_text;
+            if (percentText) percentText.textContent = `${st.percent || 0}%`;
+            if (progFill) progFill.style.width = `${st.percent || 0}%`;
+            if (startBtn) startBtn.style.display = "none";
+            if (stopBtn) stopBtn.style.display = "inline-flex";
+
+            if (st.matching_videos && st.matching_videos.length > 0) {
+                const countBadge = document.getElementById("popFoundCountBadge");
+                if (countBadge) countBadge.textContent = `${st.matching_count} видео`;
+            }
+        } else {
+            if (startBtn) startBtn.style.display = "inline-flex";
+            if (stopBtn) stopBtn.style.display = "none";
+            if (st.percent === 100 && progContainer) {
+                if (statusText) statusText.textContent = st.status_text;
+                if (percentText) percentText.textContent = "100%";
+                if (progFill) progFill.style.width = "100%";
+            }
+        }
+    } catch (err) {
+        // silent
+    }
+}
+
+async function loadPopularFiles() {
+    try {
+        const folder = document.getElementById("popFolderInput")?.value?.trim() || "video";
+        const res = await fetch(`/api/popular/files?folder=${encodeURIComponent(folder)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const countElem = document.getElementById("popFilesCount");
+        const folderDisp = document.getElementById("popFolderDisplay");
+
+        if (countElem) countElem.textContent = `${data.total} файлов`;
+        if (folderDisp) folderDisp.textContent = `${folder}/`;
+    } catch (err) {
+        // silent
+    }
+}
+
 
 
 // ==========================================================================
@@ -1541,9 +1916,11 @@ function hexToRgba(hex, alpha) {
     return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
 
-async function loadProcessingSettings() {
+async function loadProcessingSettings(accountId = null) {
     try {
-        const res = await fetch("/api/processor/settings");
+        currentProcessingAccountId = accountId;
+        const url = accountId ? `/api/processor/settings?account_id=${accountId}` : "/api/processor/settings";
+        const res = await fetch(url);
         const data = await res.json();
         if (!data.success) return;
 
@@ -1798,6 +2175,9 @@ function applySettingsToForm(s) {
         uniqCrf.value = s.unique_crf || 20;
         if (uniqCrfBadge) uniqCrfBadge.textContent = uniqCrf.value;
     }
+
+    const skipIfExceeds = document.getElementById("procSkipIfExceedsTime");
+    if (skipIfExceeds) skipIfExceeds.checked = s.skip_if_exceeds_time !== false;
 }
 
 function getActiveWatermarkMode() {
@@ -1857,7 +2237,8 @@ function renderActiveMediaCard(fileName, mediaType) {
         typeBadge.style.color = isVideo ? "var(--accent-purple)" : "var(--accent-cyan)";
     }
 
-    const url = `/api/processor/watermark-media-file?t=${Date.now()}`;
+    const accParam = currentProcessingAccountId ? `&account_id=${currentProcessingAccountId}` : "";
+    const url = `/api/processor/watermark-media-file?t=${Date.now()}${accParam}`;
     if (isVideo) {
         if (thumbImg) thumbImg.style.display = "none";
         if (thumbVid) {
@@ -1891,6 +2272,9 @@ async function uploadWatermarkMedia(file) {
 
     const fd = new FormData();
     fd.append("file", file);
+    if (currentProcessingAccountId) {
+        fd.append("account_id", currentProcessingAccountId);
+    }
 
     try {
         const res = await fetch("/api/processor/upload-watermark-media", {
@@ -1903,6 +2287,7 @@ async function uploadWatermarkMedia(file) {
             renderActiveMediaCard(data.media_name, data.media_type);
             showToast(data.message || "Медиа-вотермарк успешно загружен!", "success");
             updateLivePreview();
+            loadAccounts();
         } else {
             showToast(data.detail || data.error || "Ошибка загрузки файла", "error");
             if (dropzone) dropzone.innerHTML = origHtml;
@@ -1917,13 +2302,17 @@ async function uploadWatermarkMedia(file) {
 
 async function deleteWatermarkMedia() {
     try {
-        const res = await fetch("/api/processor/watermark-media", { method: "DELETE" });
+        const delUrl = currentProcessingAccountId
+            ? `/api/processor/watermark-media?account_id=${currentProcessingAccountId}`
+            : "/api/processor/watermark-media";
+        const res = await fetch(delUrl, { method: "DELETE" });
         const data = await res.json();
         if (data.success) {
             currentProcSettings = data.settings;
             renderActiveMediaCard("", "image");
             updateLivePreview();
             showToast("Медиа-вотермарк успешно удален", "info");
+            loadAccounts();
         }
     } catch (err) {
         showToast(`Ошибка удаления медиа-вотермарка: ${err.message}`, "error");
@@ -2012,7 +2401,9 @@ function collectSettingsFromForm() {
         unique_noise: document.getElementById("procUniqNoise")?.checked ?? true,
         unique_audio_hash: document.getElementById("procUniqAudioHash")?.checked ?? true,
         unique_preset: document.getElementById("procUniqPreset")?.value || "fast",
-        unique_crf: parseInt(document.getElementById("procUniqCrf")?.value || "20", 10)
+        unique_crf: parseInt(document.getElementById("procUniqCrf")?.value || "20", 10),
+        skip_if_exceeds_time: document.getElementById("procSkipIfExceedsTime")?.checked ?? true,
+        max_processing_time_sec: 300
     };
 }
 
@@ -2036,10 +2427,17 @@ function updateLivePreview() {
         previewTextEl.style.display = "inline-block";
 
         let previewText = s.watermark_text || "@wvids";
-        const headerUsername = document.getElementById("activeAccountUsername")?.textContent || "@channel";
+        let activeUser = "@channel";
+        if (currentProcessingAccountId) {
+            const matchingAcc = cachedAccounts.find(a => a.id === currentProcessingAccountId);
+            if (matchingAcc && matchingAcc.username) activeUser = `@${matchingAcc.username}`;
+        } else {
+            const hdr = document.getElementById("headerUsername");
+            if (hdr && hdr.textContent) activeUser = hdr.textContent;
+        }
         previewText = previewText
-            .replace("{username}", headerUsername)
-            .replace("{channel}", headerUsername)
+            .replace("{username}", activeUser)
+            .replace("{channel}", activeUser)
             .replace("{title}", "Мое Видео")
             .replace("{date}", new Date().toISOString().slice(0, 10));
 
@@ -2126,7 +2524,8 @@ function updateLivePreview() {
         previewMedEl.style.opacity = `${s.watermark_media_opacity}`;
 
         const isVideo = currentProcSettings.watermark_media_type === "video" || /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(currentProcSettings.watermark_media_name || "");
-        const mediaUrl = `/api/processor/watermark-media-file?t=${Date.now()}`;
+        const accParam = currentProcessingAccountId ? `&account_id=${currentProcessingAccountId}` : "";
+        const mediaUrl = `/api/processor/watermark-media-file?t=${Date.now()}${accParam}`;
 
         if (isVideo) {
             if (previewMedImg) previewMedImg.style.display = "none";
@@ -2230,8 +2629,18 @@ function updateBatchTabBadges() {
 }
 
 function initProcessingStudio() {
+    // 0. Account Profile Selector
+    const procAccSel = document.getElementById("procAccountSelector");
+    if (procAccSel) {
+        procAccSel.addEventListener("change", (e) => {
+            const val = e.target.value;
+            const accId = val === "global" ? null : parseInt(val);
+            loadProcessingSettings(accId);
+        });
+    }
+
     // 1. Watermark Mode Selector Buttons
-    document.querySelectorAll(".wm-mode-btn").forEach(btn => {
+    document.querySelectorAll("#wmModeSelector .wm-mode-btn").forEach(btn => {
         btn.addEventListener("click", () => {
             const mode = btn.dataset.mode;
             setWatermarkMode(mode);
@@ -2551,16 +2960,21 @@ function initProcessingStudio() {
             btnSave.disabled = true;
             btnSave.textContent = "Сохранение...";
             try {
+                const payload = { settings: s };
+                if (currentProcessingAccountId) {
+                    payload.account_id = currentProcessingAccountId;
+                }
                 const res = await fetch("/api/processor/settings", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ settings: s })
+                    body: JSON.stringify(payload)
                 });
                 const data = await res.json();
                 if (data.success) {
                     currentProcSettings = data.settings || s;
                     updateBatchTabBadges();
                     showToast(data.message || "Настройки сохранены!", "success");
+                    loadAccounts();
                 } else {
                     showToast(data.error || "Ошибка сохранения настроек", "error");
                 }
@@ -2645,16 +3059,22 @@ function initProcessingStudio() {
             try {
                 // Auto-save current settings before running test so benchmark reflects live options
                 const cur = collectSettingsFromForm();
+                const savePayload = { settings: cur };
+                const testPayload = {};
+                if (currentProcessingAccountId) {
+                    savePayload.account_id = currentProcessingAccountId;
+                    testPayload.account_id = currentProcessingAccountId;
+                }
                 await fetch("/api/processor/settings", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ settings: cur })
+                    body: JSON.stringify(savePayload)
                 });
 
                 const res = await fetch("/api/processor/test", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({})
+                    body: JSON.stringify(testPayload)
                 });
                 const data = await res.json();
 

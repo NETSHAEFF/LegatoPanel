@@ -38,18 +38,20 @@ def main():
     display_host = "localhost" if HOST in ("0.0.0.0", "127.0.0.1") else HOST
     panel_url = f"http://{display_host}" if selected_port == 80 else f"http://{display_host}:{selected_port}"
 
+    from backend.storage import get_tor_config
     from backend.tor import auto_detect_tor_port, check_tor_connection, tor_manager
-    detected_tor = auto_detect_tor_port()
-    if not detected_tor:
-        print("[*] 🧅 Запуск автономного фонового Tor (без запуска браузера)...")
-        tor_manager.ensure_running(port=9050)
-        detected_tor = auto_detect_tor_port()
+    cfg = get_tor_config()
+    target_tor_port = cfg.get("port") or 9150
+    print(f"[*] 🧅 Проверка и запуск автономного Tor (порт {target_tor_port})...")
+    tor_manager.ensure_running(port=target_tor_port)
+    detected_tor = auto_detect_tor_port() or target_tor_port
 
     tor_info_str = "НЕ ОБНАРУЖЕН на 9050/9150"
     if detected_tor:
-        st = check_tor_connection(port=detected_tor, timeout=6)
+        st = check_tor_connection(port=detected_tor, timeout=8)
         if st.get("connected"):
-            mode_str = "Автономный фоновый" if detected_tor == 9050 else "Tor Browser"
+            mgr_st = tor_manager.get_status()
+            mode_str = "Автономный фоновый" if mgr_st.get("managed_by_panel") else ("Tor Browser" if detected_tor == 9150 else "Системный")
             tor_info_str = f"ПОДКЛЮЧЕНО [{mode_str}] (Exit IP: {st.get('ip')}, порт: {detected_tor}, 0 DNS leak)"
         else:
             tor_info_str = f"Порт {detected_tor} открыт, построение цепи Tor..."

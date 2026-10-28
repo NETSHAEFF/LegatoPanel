@@ -17,16 +17,19 @@ sys.path.insert(0, str(BASE_DIR))
 from backend.storage import get_active_account, save_account, update_account_stats, get_tor_config, get_setting
 from backend.client import WvidsClient
 from backend.uploader import ContentUploader
-from backend.fingerprint import parse_cookies_input
+from backend.fingerprint import parse_cookies_input, human_jitter
 from backend.tor import check_tor_connection, auto_detect_tor_port, tor_manager
 from backend.batch_worker import batch_worker
+from backend.popular_downloader import popular_downloader, sanitize_filename
 
 def get_client() -> WvidsClient:
     active = get_active_account()
     if not active:
         print("[!] Ошибка: Нет активного сохраненного аккаунта. Сначала выполните: python cli.py login --cookies \"...\"")
         sys.exit(1)
-    tor_manager.ensure_running(port=9050)
+    cfg = get_tor_config()
+    target_port = cfg.get("port") or 9150
+    tor_manager.ensure_running(port=target_port)
     return WvidsClient(
         cookies=active.get("cookies", {}),
         fingerprint=active.get("fingerprint", "chrome124"),
@@ -41,8 +44,10 @@ async def cmd_batch(args):
     folder = args.folder or "videos"
     delay_min = args.interval or 5.0
     desc = args.desc or get_setting("batch_desc", "")
+    loop_mode = not getattr(args, "no_loop", False)
     print(f"[*] Запуск пакетной публикации из папки '{folder}'...")
     print(f"[*] Интервал после успешной выгрузки: {delay_min} мин.")
+    print(f"[*] Бесконечный цикл по кругу: {'ВКЛЮЧЕН (очередь пойдет заново)' if loop_mode else 'ВЫКЛЮЧЕН'}")
     if desc:
         desc_preview = (desc[:45] + "...") if len(desc) > 45 else desc
         print(f"[*] Описание: '{desc_preview}'")
@@ -54,7 +59,8 @@ async def cmd_batch(args):
         delay_minutes=delay_min,
         title_template=args.title or "",
         desc_template=desc,
-        account_id=active["id"]
+        account_id=active["id"],
+        loop_mode=loop_mode
     )
     if not res.get("success"):
         print(f"[!] {res.get('error')}")
@@ -66,11 +72,12 @@ async def cmd_batch(args):
             if not st["is_running"]:
                 print(f"\n[+] {st['last_message']}")
                 break
+            cycle_str = f" [Круг #{st.get('cycle', 1)}]" if loop_mode or st.get('cycle', 1) > 1 else ""
             if st["state"] == "waiting_delay":
-                print(f"\r[⏳] Пауза: осталось {st['delay_remaining']} сек... (Успешно: {st['success_count']}, Дубликатов: {st['duplicate_count']})   ", end="", flush=True)
+                print(f"\r[⏳]{cycle_str} Пауза: осталось {st['delay_remaining']} сек... (Успешно: {st['success_count']}, Дубликатов: {st['duplicate_count']})   ", end="", flush=True)
             else:
                 curr = st["current_file"] or "подготовка"
-                print(f"\r[*] Выгрузка: {curr} ({st['current_index']}/{st['total_files']}) [Успешно: {st['success_count']}, Дубликатов: {st['duplicate_count']}]   ", end="", flush=True)
+                print(f"\r[*]{cycle_str} Выгрузка: {curr} ({st['current_index']}/{st['total_files']}) [Успешно: {st['success_count']}, Дубликатов: {st['duplicate_count']}]   ", end="", flush=True)
             await asyncio.sleep(1)
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n[!] Остановка по требованию пользователя...")
@@ -79,12 +86,16 @@ async def cmd_batch(args):
 
 async def cmd_tor(args):
     action = getattr(args, "action", "status")
+    cfg = get_tor_config()
+    default_p = cfg.get("port") or 9150
+
     if action == "start":
-        print("[*] 🧅 Запуск автономного фонового Tor (без браузера)...")
-        res = tor_manager.start(port=args.port or 9050)
+        target_port = args.port or default_p
+        print(f"[*] 🧅 Запуск автономного фонового Tor на порту {target_port}...")
+        res = tor_manager.start(port=target_port)
         if res.get("success"):
             print(f"[+] {res.get('message', 'Tor успешно запущен')}")
-            st = check_tor_connection(port=args.port or 9050)
+            st = check_tor_connection(port=target_port)
             if st.get("connected"):
                 print(f"[+] 🌐 Выходной Tor IP: {st.get('ip')}")
             print(f"[*] Для удержания службы нажмите Ctrl+C для выхода.")
@@ -107,14 +118,15 @@ async def cmd_tor(args):
     print("[*] Проверка подключения к сети Tor (без DNS-утечек)...")
     detected = auto_detect_tor_port()
     if not detected:
-        print("[*] Tor не обнаружен. Автоматический запуск автономного Tor в фоне...")
-        tor_manager.ensure_running(port=args.port or 9050)
+        target_port = args.port or default_p
+        print(f"[*] Tor не обнаружен. Автоматический запуск автономного Tor (порт {target_port})...")
+        tor_manager.ensure_running(port=target_port)
         detected = auto_detect_tor_port()
 
-    port = args.port or detected or 9050
+    port = args.port or detected or default_p
     status = check_tor_connection(port=port)
     mgr_status = tor_manager.get_status()
-    mode = "Автономный фоновый" if (mgr_status.get("managed_by_panel") or port == 9050) else "Tor Browser"
+    mode = "Автономный фоновый" if mgr_status.get("managed_by_panel") else ("Tor Browser" if port == 9150 else "Системный")
 
     print("=" * 55)
     if status.get("connected"):
@@ -139,13 +151,13 @@ async def cmd_login(args):
 
     client = WvidsClient(cookies=cookies_dict, proxy=args.proxy, fingerprint=args.fingerprint)
     print("[*] Проверка сессии через анонимный TLS...")
-    verify = await client.verify_session()
+    verify = await client.verify_session(fallback_name=args.name)
     if not verify.get("valid"):
         print(f"[!] Авторизация не удалась: {verify.get('error', 'Проверьте cookies')}")
         return
 
     uid = verify.get("uid")
-    username = verify.get("username")
+    username = verify.get("username") or args.name or f"user_{uid}"
     acc_id = save_account(
         name=args.name or f"@{username}",
         username=username,
@@ -259,6 +271,148 @@ async def cmd_redact_all(args):
 
     print(f"\n[+] 🎉 Завершено! Успешно обновлено: {success_cnt}/{len(posts)}, ошибок: {fail_cnt}")
 
+async def cmd_download_popular(args):
+    active = get_active_account()
+    cfg = get_tor_config()
+    target_port = cfg.get("port") or 9150
+    try:
+        tor_manager.ensure_running(port=target_port)
+    except Exception:
+        pass
+
+    if active:
+        client = WvidsClient(
+            cookies=active.get("cookies", {}),
+            fingerprint=active.get("fingerprint", "chrome124"),
+            use_tor=True
+        )
+    else:
+        client = WvidsClient(use_tor=True)
+
+    folder_str = args.folder or "video"
+    min_views = args.min_views or 0
+    max_pages = args.max_pages or 0
+    limit = args.limit or 0
+    scan_only = getattr(args, "scan_only", False)
+
+    f_path = Path(folder_str)
+    if not f_path.is_absolute():
+        f_path = BASE_DIR / folder_str
+    f_path.mkdir(parents=True, exist_ok=True)
+
+    print("=" * 65)
+    print(" 🔥 WVIDS — СКАЧИВАНИЕ ИЗ РАЗДЕЛА 'ПОПУЛЯРНОЕ'")
+    print("=" * 65)
+    print(f" 📁 Папка сохранения:       {f_path}")
+    print(f" 👁️  Фильтр просмотров:      >= {min_views:,} просм.")
+    print(f" 📄 Ограничение страниц:     {'ВСЕ страницы (полный скан)' if max_pages == 0 else f'до {max_pages} стр.'}")
+    if limit > 0:
+        print(f" 🎯 Лимит видео:             до {limit} шт.")
+    print(f" 🧅 Маршрутизация:           Tor SOCKS5 (Zero DNS leak)")
+    print("=" * 65)
+
+    print(f"[*] 🔍 Сканирование страниц раздела 'Популярное'...")
+    def on_scan(page, matches, total_seen, has_more):
+        print(f"\r[*] 🔍 Стр. {page}: найдено {matches} подходящих видео (всего просмотрено: {total_seen})...   ", end="", flush=True)
+
+    videos = await client.get_popular_videos(
+        min_views=min_views,
+        max_pages=max_pages,
+        progress_callback=on_scan
+    )
+    print()
+
+    if not videos:
+        print(f"[!] Не найдено видео с просмотрами >= {min_views}.")
+        return
+
+    print(f"[+] Найдено {len(videos)} подходящих видео!")
+
+    if scan_only:
+        print("=" * 65)
+        for i, v in enumerate(videos[:40], 1):
+            dur_m, dur_s = divmod(v.get("duration", 0), 60)
+            print(f"[{i:3d}] ID: {v['file_id']:<8} | {v['views']:>7,} просм. | {dur_m:02d}:{dur_s:02d} | {v['title'][:40]}")
+        if len(videos) > 40:
+            print(f"... и еще {len(videos) - 40} видео")
+        print("=" * 65)
+        return
+
+    to_dl = videos[:limit] if limit > 0 else videos
+    print(f"[*] 📥 Начинаем скачивание {len(to_dl)} видео в '{f_path}'...\n")
+
+    downloaded = 0
+    skipped = 0
+    failed = 0
+
+    try:
+        for idx, v in enumerate(to_dl, 1):
+            fid = v["file_id"]
+            title = v.get("title") or ""
+            views = v.get("views", 0)
+            slug = v.get("slug") or fid
+
+            # Check if file exists
+            existing = None
+            if (f_path / f"{fid}.mp4").exists() and (f_path / f"{fid}.mp4").stat().st_size > 1024:
+                existing = f_path / f"{fid}.mp4"
+            else:
+                for p in f_path.glob(f"{fid}_*.mp4"):
+                    if p.is_file() and p.stat().st_size > 1024:
+                        existing = p
+                        break
+
+            if existing:
+                skipped += 1
+                mb = existing.stat().st_size / (1024 * 1024)
+                print(f"[{idx}/{len(to_dl)}] ⏭️  Пропуск: {existing.name} (уже скачан, {mb:.1f} MB)")
+                continue
+
+            safe_t = sanitize_filename(title)
+            dest_name = f"{fid}_{safe_t}.mp4" if safe_t else f"{fid}.mp4"
+            dest_file = f_path / dest_name
+
+            print(f"[{idx}/{len(to_dl)}] 🔗 Получение ссылки: ID {fid} ({views:,} просм.)...", end="", flush=True)
+            stream_url = await client.get_video_download_url(slug)
+            if not stream_url:
+                failed += 1
+                print(f"\r[{idx}/{len(to_dl)}] ❌ Ошибка: не удалось получить URL для ID {fid}          ")
+                continue
+
+            def on_progress(bytes_dl, bytes_tot):
+                pct = (bytes_dl / bytes_tot * 100) if bytes_tot else 0
+                mb_dl = bytes_dl / (1024 * 1024)
+                mb_tot = bytes_tot / (1024 * 1024)
+                print(f"\r[{idx}/{len(to_dl)}] ⬇️  {dest_name[:30]} | {mb_dl:.1f}/{mb_tot:.1f} MB ({pct:.1f}%)   ", end="", flush=True)
+
+            success = await client.download_video_file(
+                video_url=stream_url,
+                dest_path=dest_file,
+                on_progress=on_progress,
+                timeout=300
+            )
+
+            if success:
+                downloaded += 1
+                mb = dest_file.stat().st_size / (1024 * 1024)
+                print(f"\r[{idx}/{len(to_dl)}] ✅ {dest_name} ({mb:.1f} MB) — Успешно скачан!          ")
+            else:
+                failed += 1
+                print(f"\r[{idx}/{len(to_dl)}] ❌ Ошибка скачивания {dest_name}                          ")
+
+            await human_jitter(0.3, 0.6)
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n\n[!] Остановка скачивания по требованию пользователя...")
+
+    print("\n" + "=" * 65)
+    print(f" 🎉 ИТОГО:")
+    print(f"    ✅ Скачано новых видео:   {downloaded}")
+    print(f"    ⏭️  Пропущено дубликатов: {skipped}")
+    print(f"    ❌ Ошибок скачивания:     {failed}")
+    print(f"    📁 Папка с видео:         {f_path}")
+    print("=" * 65)
+
 def main():
     parser = argparse.ArgumentParser(description="Wvids Studio CLI Automation Tool")
     subparsers = parser.add_subparsers(dest="command", help="Команда для выполнения")
@@ -289,11 +443,12 @@ def main():
     p_batch.add_argument("--interval", "-i", type=float, default=5.0, help="Пауза между успешными публикациями в минутах (по умолчанию: 5)")
     p_batch.add_argument("--title", "-t", default="", help="Шаблон заголовка (можно использовать {name})")
     p_batch.add_argument("--desc", "-d", default="", help="Кастомное описание видео")
+    p_batch.add_argument("--no-loop", action="store_true", help="Отключить бесконечный цикл (по умолчанию: включен, очередь идет заново)")
 
     # Tor Status & Control
     p_tor = subparsers.add_parser("tor", help="Проверка статуса и управление автономным Tor")
     p_tor.add_argument("action", nargs="?", choices=["status", "start", "stop"], default="status", help="Действие: status, start, stop (по умолчанию: status)")
-    p_tor.add_argument("--port", "-p", type=int, default=None, help="Порт SOCKS Tor (по умолчанию: 9050)")
+    p_tor.add_argument("--port", "-p", type=int, default=None, help="Порт SOCKS Tor (по умолчанию: 9150)")
 
     # Scan Posts
     p_scan = subparsers.add_parser("scan", help="Сканировать все публикации канала (page=1, 2, 3...)")
@@ -304,6 +459,18 @@ def main():
     p_redact.add_argument("--title", "-t", default="", help="Новый заголовок / шаблон (поддерживает {i}, {title})")
     p_redact.add_argument("--desc", "-d", default="", help="Новое описание")
     p_redact.add_argument("--max-pages", type=int, default=50, help="Максимум страниц для сканирования")
+
+    # Download Popular Videos
+    p_pop = subparsers.add_parser(
+        "download-popular",
+        aliases=["popular"],
+        help="Скачивание видео из раздела 'Популярное' с фильтром по просмотрам и обходом всех страниц"
+    )
+    p_pop.add_argument("--min-views", "-m", type=int, default=0, help="Минимальное количество просмотров (по умолчанию: 0)")
+    p_pop.add_argument("--folder", "-F", default="video", help="Папка для сохранения видео (по умолчанию: video)")
+    p_pop.add_argument("--max-pages", "-p", type=int, default=0, help="Максимум страниц для сканирования (0 = сканировать ВСЕ страницы)")
+    p_pop.add_argument("--limit", "-l", type=int, default=0, help="Максимальное количество видео для скачивания (0 = все найденные)")
+    p_pop.add_argument("--scan-only", action="store_true", help="Только показать список найденных видео без скачивания")
 
     args = parser.parse_args()
     if not args.command:
@@ -326,6 +493,8 @@ def main():
         asyncio.run(cmd_scan(args))
     elif args.command == "redact-all":
         asyncio.run(cmd_redact_all(args))
+    elif args.command in ("download-popular", "popular"):
+        asyncio.run(cmd_download_popular(args))
 
 if __name__ == "__main__":
     main()

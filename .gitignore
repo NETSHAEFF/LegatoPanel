@@ -21,6 +21,8 @@ uploads/*
 !uploads/.gitkeep
 videos/*
 !videos/.gitkeep
+video/*
+!video/.gitkeep
 
 # Executables & Binaries
 *.exe
@@ -31,6 +33,9 @@ ffmpeg.exe
 *.tmp
 *.pid
 .cache/
+tor/data/
+tor/torrc
+tor/*.log
 
 # IDE / Editor settings
 .vscode/

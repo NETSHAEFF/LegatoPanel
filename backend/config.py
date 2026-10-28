@@ -6,12 +6,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 UPLOADS_DIR = BASE_DIR / "uploads"
 VIDEOS_DIR = BASE_DIR / "videos"
+DOWNLOAD_VIDEO_DIR = BASE_DIR / "video"
 WATERMARKS_DIR = DATA_DIR / "watermarks"
 DB_PATH = DATA_DIR / "wvids_panel.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+DOWNLOAD_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 WATERMARKS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default Host & Endpoints
@@ -28,6 +30,7 @@ URL_CHART_FID = f"{DEFAULT_HOST}/api/get_chart_fid.php"
 URL_USERS_API = f"{DEFAULT_HOST}/api/api_users.php"
 URL_REDACT_CONTENT = f"{DEFAULT_HOST}/api/redact_content.php"
 URL_MANAGEFORMS = f"{DEFAULT_HOST}/api/manageforms.php"
+URL_FETCH_CONTENT = f"{DEFAULT_HOST}/api/fetch_content.php"
 
 # Upload limits
 MAX_FILE_SIZE_BYTES = 300 * 1024 * 1024  # 300 MB
@@ -46,8 +49,8 @@ DEFAULT_FINGERPRINT = "chrome124"
 # Tor Routing Configuration (socks5h for 0 DNS leak)
 TOR_ENABLED = True
 TOR_HOST = "127.0.0.1"
-TOR_DEFAULT_PORT = 9050   # Standalone Headless Tor service port
-TOR_FALLBACK_PORT = 9150  # Tor Browser port
+TOR_DEFAULT_PORT = 9150   # Standalone Headless Tor service port
+TOR_FALLBACK_PORT = 9050  # Tor fallback port
 TOR_STRICT_MODE = True    # Blocks non-Tor traffic to prevent real IP leaks
 
 # Standard Web Panel Server Settings

@@ -1,7 +1,7 @@
 import sqlite3
 import json
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from .config import DB_PATH
 
 def get_connection() -> sqlite3.Connection:
@@ -76,6 +76,14 @@ def init_db():
         cursor.execute("ALTER TABLE accounts ADD COLUMN suspension_reason TEXT DEFAULT ''")
     if "suspended_at" not in account_cols:
         cursor.execute("ALTER TABLE accounts ADD COLUMN suspended_at INTEGER DEFAULT 0")
+    if "title_template" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN title_template TEXT DEFAULT ''")
+    if "desc_template" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN desc_template TEXT DEFAULT ''")
+    if "watermark_settings" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN watermark_settings TEXT DEFAULT ''")
+    if "is_batch_enabled" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN is_batch_enabled INTEGER DEFAULT 1")
 
     # Seed default Tor settings (enabled by default)
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tor_enabled', '1')")
@@ -121,7 +129,65 @@ def format_account_row(r) -> Dict[str, Any]:
     d["is_suspended"] = bool(d.get("is_suspended", 0))
     d["suspension_reason"] = d.get("suspension_reason") or ""
     d["suspended_at"] = d.get("suspended_at") or 0
+    d["title_template"] = d.get("title_template") or ""
+    d["desc_template"] = d.get("desc_template") or ""
+    d["is_batch_enabled"] = bool(d.get("is_batch_enabled", 1))
+
+    # Parse watermark_settings JSON
+    wm_raw = d.get("watermark_settings")
+    if wm_raw:
+        try:
+            d["watermark_settings"] = json.loads(wm_raw) if isinstance(wm_raw, str) else wm_raw
+        except Exception:
+            d["watermark_settings"] = {}
+    else:
+        d["watermark_settings"] = {}
+
+    d["has_custom_watermark"] = bool(d["watermark_settings"].get("use_custom_watermark", False))
     return d
+
+def update_account_settings(
+    account_id: int,
+    title_template: Optional[str] = None,
+    desc_template: Optional[str] = None,
+    watermark_settings: Optional[Dict[str, Any]] = None,
+    is_batch_enabled: Optional[bool] = None
+) -> Dict[str, Any]:
+    acc = get_account_by_id(account_id)
+    if not acc:
+        raise ValueError(f"Account {account_id} not found")
+
+    conn = get_connection()
+    c = conn.cursor()
+
+    updates = []
+    params = []
+
+    if title_template is not None:
+        updates.append("title_template = ?")
+        params.append(title_template.strip())
+
+    if desc_template is not None:
+        updates.append("desc_template = ?")
+        params.append(desc_template.strip())
+
+    if is_batch_enabled is not None:
+        updates.append("is_batch_enabled = ?")
+        params.append(1 if is_batch_enabled else 0)
+
+    if watermark_settings is not None:
+        existing_wm = acc.get("watermark_settings") or {}
+        existing_wm.update(watermark_settings)
+        updates.append("watermark_settings = ?")
+        params.append(json.dumps(existing_wm, ensure_ascii=False))
+
+    if updates:
+        params.append(account_id)
+        c.execute(f"UPDATE accounts SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+
+    conn.close()
+    return get_account_by_id(account_id)
 
 def get_all_accounts() -> List[Dict[str, Any]]:
     conn = get_connection()
@@ -307,18 +373,35 @@ def get_recent_uploads(limit: int = 50) -> List[Dict[str, Any]]:
     conn.close()
     return [dict(r) for r in rows]
 
-def get_uploaded_filenames() -> set:
+def get_uploaded_filenames(account_id: Optional[int] = None) -> set:
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'success'")
+    if account_id:
+        c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'success' AND account_id = ?", (account_id,))
+    else:
+        c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'success'")
     rows = c.fetchall()
     conn.close()
     return {r["filename"] for r in rows if r["filename"]}
 
-def get_duplicate_filenames() -> set:
+def get_duplicate_filenames(account_id: Optional[int] = None) -> set:
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'duplicate'")
+    if account_id:
+        c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'duplicate' AND account_id = ?", (account_id,))
+    else:
+        c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'duplicate'")
+    rows = c.fetchall()
+    conn.close()
+    return {r["filename"] for r in rows if r["filename"]}
+
+def get_skipped_filenames(account_id: Optional[int] = None) -> set:
+    conn = get_connection()
+    c = conn.cursor()
+    if account_id:
+        c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'skipped' AND account_id = ?", (account_id,))
+    else:
+        c.execute("SELECT DISTINCT filename FROM uploads WHERE status = 'skipped'")
     rows = c.fetchall()
     conn.close()
     return {r["filename"] for r in rows if r["filename"]}
@@ -403,11 +486,13 @@ DEFAULT_PROCESSING_SETTINGS: Dict[str, Any] = {
     "unique_device_profile": "random",   # random, iphone15, s24, pixel8, sony_a7
     "unique_duration_mode": "random",    # random, add, trim, speed, none
     "unique_duration_delta": 1.0,        # seconds to add or trim
-    "unique_visual_hash": True,          # micro-zoom, rotation, vignette, gamma
-    "unique_noise": True,                # dynamic sensor noise
-    "unique_audio_hash": True,           # pitch shift, eq, echo
-    "unique_preset": "fast",             # ultrafast, superfast, fast, medium
-    "unique_crf": 20                     # 18-24
+    "unique_visual_hash": True,          # micro-crop spatial jitter
+    "unique_noise": False,               # dynamic sensor noise (off by default for speed)
+    "unique_audio_hash": False,          # pitch shift, eq, echo (off by default for audio copy)
+    "unique_preset": "ultrafast",        # ultrafast for high rendering throughput
+    "unique_crf": 24,                    # 20-28 (24 is optimal for web & Tor speed)
+    "max_processing_time_sec": 300,      # 5 minutes processing limit
+    "skip_if_exceeds_time": True         # Auto-skip video if uniqueization will take > 5 minutes
 }
 
 def get_processing_settings() -> Dict[str, Any]:
@@ -426,6 +511,68 @@ def save_processing_settings(new_cfg: Dict[str, Any]) -> Dict[str, Any]:
     curr.update(new_cfg)
     set_setting("video_processing_settings", json.dumps(curr, ensure_ascii=False))
     return curr
+
+def get_account_processing_settings(account_id: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Returns effective processing & watermark settings for a specific account.
+    If account has custom watermark settings enabled (use_custom_watermark=True),
+    they override the global defaults.
+    """
+    global_cfg = get_processing_settings()
+    if not account_id:
+        return global_cfg
+
+    acc = get_account_by_id(account_id)
+    if not acc:
+        return global_cfg
+
+    custom_cfg = acc.get("watermark_settings") or {}
+    if not custom_cfg.get("use_custom_watermark", False):
+        # Fall back to global settings, but if watermark_text is default '@wvids', replace with account username
+        cfg = dict(global_cfg)
+        if cfg.get("watermark_text") == "@wvids" and acc.get("username"):
+            cfg["watermark_text"] = f"@{acc['username']}"
+        return cfg
+
+    merged = dict(global_cfg)
+    merged.update(custom_cfg)
+    # Ensure username tag matches account if empty
+    if not merged.get("watermark_text") and acc.get("username"):
+        merged["watermark_text"] = f"@{acc['username']}"
+    return merged
+
+def save_account_processing_settings(account_id: int, new_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Saves custom processing / watermark settings for a specific account."""
+    acc = get_account_by_id(account_id)
+    if not acc:
+        raise ValueError(f"Account {account_id} not found")
+
+    existing_wm = acc.get("watermark_settings") or {}
+    existing_wm.update(new_cfg)
+    existing_wm["use_custom_watermark"] = True
+
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE accounts SET watermark_settings = ? WHERE id = ?",
+        (json.dumps(existing_wm, ensure_ascii=False), account_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return get_account_processing_settings(account_id)
+
+def get_account_metadata_templates(account_id: int) -> Tuple[str, str]:
+    """Returns (title_template, desc_template) for an account, falling back to global batch templates."""
+    acc = get_account_by_id(account_id)
+    global_title = get_setting("batch_title", "")
+    global_desc = get_setting("batch_desc", "")
+    if not acc:
+        return global_title, global_desc
+
+    title = acc.get("title_template", "").strip() or global_title
+    desc = acc.get("desc_template", "").strip() or global_desc
+    return title, desc
 
 # Initialize tables
 init_db()
