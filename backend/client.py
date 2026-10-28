@@ -98,6 +98,7 @@ class WvidsClient:
         self.proxy = proxy.strip() if proxy else None
         self.fingerprint = fingerprint or DEFAULT_FINGERPRINT
         self._session: Optional[requests.Session] = None
+        self._comment_session: Optional[requests.Session] = None
         self.cached_config: Optional[Dict[str, Any]] = None
 
         # Check Tor mode: defaults to database setting (enabled by default)
@@ -164,6 +165,29 @@ class WvidsClient:
 
         return self._session
 
+    def get_comment_session(self) -> requests.Session:
+        """
+        Returns a session configured specifically for posting comments to wvids.com.
+        NOTE: 'auth_sess' must be excluded because wvids.com comments.php has a PHP 8
+        type crash (TypeError in getUserBlockStatus) when looking up auth_sess, whereas
+        authenticating solely via auth_user_id + auth_p avoids this bug and succeeds.
+        """
+        if self._comment_session is None:
+            proxies = self._get_proxies_dict()
+            sess = requests.Session(
+                impersonate=self.fingerprint,
+                proxies=proxies
+            )
+            sess.headers.update(get_browser_headers(self.fingerprint))
+            for k, v in self.cookies.items():
+                if k == "auth_sess":
+                    continue
+                sess.cookies.set(k, v, domain="wvids.com")
+                sess.cookies.set(k, v, domain=".wvids.com")
+                sess.cookies.set(k, v)
+            self._comment_session = sess
+        return self._comment_session
+
     def reset_session(self):
         if self._session:
             try:
@@ -171,6 +195,12 @@ class WvidsClient:
             except Exception:
                 pass
             self._session = None
+        if self._comment_session:
+            try:
+                self._comment_session.close()
+            except Exception:
+                pass
+            self._comment_session = None
 
     def update_cookies(self, new_cookies: Dict[str, str]):
         self.cookies.update(new_cookies)
@@ -1264,7 +1294,7 @@ class WvidsClient:
         """
         Posts a comment to wvids.com video via /api/comments.php?write.
         """
-        session = self.get_session()
+        session = self.get_comment_session()
         await human_jitter(0.3, 0.6)
 
         referer = f"https://wvids.com/{slug}" if slug else "https://wvids.com/"
