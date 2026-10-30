@@ -1,0 +1,165 @@
+{
+  "interval_seconds": 300,
+  "min_views": 10,
+  "max_views": 5000,
+  "max_pages_scan": 3,
+  "daily_limit": 35,
+  "comment_templates": [
+    "Смотри полный ролик тут tg- @rollyxslivbot"
+  ],
+  "enable_spintax": false,
+  "commented_fids": [
+    "9526154",
+    "9526146",
+    "9526216",
+    "9526177"
+  ],
+  "history": [
+    {
+      "file_id": "8e43a2740-23fe536",
+      "title": "Тестовое видео 8e43a2740-23fe536",
+      "views": 0,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "getUserBlockStatus(): Argument #2 ($userId) must be of type ?int, string given, called in /home/webadmin/apps/site/src/functions/comment.php on line 2591",
+      "timestamp": 1793195232,
+      "time_str": "16:47:12",
+      "post_url": "https://wvids.com/8e43a2740-23fe536"
+    },
+    {
+      "file_id": "https://namevids.net/992c19286-f706371",
+      "title": "Тестовое видео https://namevids.net/992c19286-f706371",
+      "views": 0,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "Invalid file ID",
+      "timestamp": 1793195260,
+      "time_str": "16:47:40",
+      "post_url": "https://wvids.com/https://namevids.net/992c19286-f706371"
+    },
+    {
+      "file_id": "1793195234",
+      "title": "Тестовое видео 1793195234",
+      "views": 0,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "getUserBlockStatus(): Argument #2 ($userId) must be of type ?int, string given, called in /home/webadmin/apps/site/src/functions/comment.php on line 2591",
+      "timestamp": 1793195293,
+      "time_str": "16:48:13",
+      "post_url": "https://wvids.com/1793195234"
+    },
+    {
+      "file_id": "9526124",
+      "title": "Mechanics Like To poke Tw-nk",
+      "views": 13,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "getUserBlockStatus(): Argument #2 ($userId) must be of type ?int, string given, called in /home/webadmin/apps/site/src/functions/comment.php on line 2591",
+      "timestamp": 1793195315,
+      "time_str": "16:48:35",
+      "post_url": "https://wvids.com/f5497e0a7-9dacb52"
+    },
+    {
+      "file_id": "9526152",
+      "title": "buzzcast.org",
+      "views": 16,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "getUserBlockStatus(): Argument #2 ($userId) must be of type ?int, string given, called in /home/webadmin/apps/site/src/functions/comment.php on line 2591",
+      "timestamp": 1793195635,
+      "time_str": "16:53:55",
+      "post_url": "https://wvids.com/15497e956-2453998"
+    },
+    {
+      "file_id": "9526155",
+      "title": "Не так как у всех",
+      "views": 13,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "getUserBlockStatus(): Argument #2 ($userId) must be of type ?int, string given, called in /home/webadmin/apps/site/src/functions/comment.php on line 2591",
+      "timestamp": 1793195783,
+      "time_str": "16:56:23",
+      "post_url": "https://wvids.com/c5497ee31-5a2fbfc"
+    },
+    {
+      "file_id": "9526133",
+      "title": "DESC 0426",
+      "views": 33,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "error",
+      "error": "getUserBlockStatus(): Argument #2 ($userId) must be of type ?int, string given, called in /home/webadmin/apps/site/src/functions/comment.php on line 2591",
+      "timestamp": 1793195893,
+      "time_str": "16:58:13",
+      "post_url": "https://wvids.com/95497ee8f-bfac6a6"
+    },
+    {
+      "file_id": "9526216",
+      "title": "Тестовое видео 9526216",
+      "views": 0,
+      "comment": "Тестовая проверка автокомментинга",
+      "status": "success",
+      "error": "",
+      "timestamp": 1793196149,
+      "time_str": "17:02:29",
+      "post_url": "https://wvids.com/9526216"
+    },
+    {
+      "file_id": "9526154",
+      "title": "Бывшая",
+      "views": 25,
+      "comment": "Смотри полный ролик тут - @rollyxslivbot",
+      "status": "success",
+      "error": "",
+      "timestamp": 1793196278,
+      "time_str": "17:04:38",
+      "post_url": "https://wvids.com/0549133ec-adeb549"
+    },
+    {
+      "file_id": "9526146",
+      "title": "3am and finally finding some 18+ Links TG",
+      "views": 21,
+      "comment": "Смотри полный ролик тут - https://t.me/rollyxslivbot",
+      "status": "success",
+      "error": "",
+      "timestamp": 1793196356,
+      "time_str": "17:05:56",
+      "post_url": "https://wvids.com/3549137f1-71be5f0"
+    },
+    {
+      "file_id": "9526177",
+      "title": "Leaks OnlyFans Girl",
+      "views": 10,
+      "comment": "Смотри полный ролик тут tg- @rollyxslivbot",
+      "status": "success",
+      "error": "",
+      "timestamp": 1793196684,
+      "time_str": "17:11:24",
+      "post_url": "https://wvids.com/25491316b-fa0e4af"
+    },
+    {
+      "file_id": "9526262",
+      "title": "threesome with hot friends girlfriend",
+      "views": 10,
+      "comment": "Смотри полный ролик тут tg- @rollyxslivbot",
+      "status": "error",
+      "error": "Invalid comment content",
+      "timestamp": 1793196981,
+      "time_str": "17:16:21",
+      "post_url": "https://wvids.com/a54913a21-8fa0c17"
+    },
+    {
+      "file_id": "9526210",
+      "title": "OrFnp",
+      "views": 15,
+      "comment": "Смотри полный ролик тут tg- @rollyxslivbot",
+      "status": "error",
+      "error": "Invalid comment content",
+      "timestamp": 1793197327,
+      "time_str": "17:22:07",
+      "post_url": "https://wvids.com/554913c38-084e167"
+    }
+  ],
+  "today_date": "2026-10-30",
+  "today_count": 0,
+  "total_count": 4
+}
