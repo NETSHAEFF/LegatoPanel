@@ -110,6 +110,7 @@ mkdir -p data uploads videos logs
 
 # 7. Start / Restart application via PM2
 echo -e "\n${GREEN}[5/6] Запуск приложения в PM2 через ecosystem.config.js...${NC}"
+pm2 delete legato 2>/dev/null || true
 pm2 delete legato-panel 2>/dev/null || true
 
 # Завершаем старые фоновые процессы Python, если они были запущены вручную
@@ -147,9 +148,9 @@ echo -e "${BLUE}================================================================
 echo -e " ▸ Адрес веб-панели (внешний): ${YELLOW}${URL_EXTERNAL}${NC}"
 echo -e " ▸ Адрес локальный:            ${YELLOW}${URL_LOCAL}${NC}"
 echo -e "\n${BLUE} Полезные команды для управления:${NC}"
-echo -e " • Статус процесса:    ${GREEN}pm2 status legato-panel${NC}"
-echo -e " • Живые логи:         ${GREEN}pm2 logs legato-panel${NC}"
-echo -e " • Перезапуск:         ${GREEN}pm2 restart legato-panel${NC}"
-echo -e " • Остановка:          ${GREEN}pm2 stop legato-panel${NC}"
+echo -e " • Статус процесса:    ${GREEN}pm2 status legato${NC}"
+echo -e " • Живые логи:         ${GREEN}pm2 logs legato${NC}"
+echo -e " • Перезапуск:         ${GREEN}pm2 restart legato${NC}"
+echo -e " • Остановка:          ${GREEN}pm2 stop legato${NC}"
 echo -e " • Автозапуск при загрузке сервера: ${YELLOW}pm2 startup${NC} (выполните команду, которую выдаст PM2)"
 echo -e "${BLUE}======================================================================${NC}\n"

@@ -3,6 +3,7 @@ import json
 import time
 import base64
 import os
+import random
 import asyncio
 from pathlib import Path
 from urllib.parse import quote
@@ -97,6 +98,7 @@ class WvidsClient:
         self.proxy = proxy.strip() if proxy else None
         self.fingerprint = fingerprint or DEFAULT_FINGERPRINT
         self._session: Optional[requests.Session] = None
+        self._comment_session: Optional[requests.Session] = None
         self.cached_config: Optional[Dict[str, Any]] = None
 
         # Check Tor mode: defaults to database setting (enabled by default)
@@ -163,6 +165,29 @@ class WvidsClient:
 
         return self._session
 
+    def get_comment_session(self) -> requests.Session:
+        """
+        Returns a session configured specifically for posting comments to wvids.com.
+        NOTE: 'auth_sess' must be excluded because wvids.com comments.php has a PHP 8
+        type crash (TypeError in getUserBlockStatus) when looking up auth_sess, whereas
+        authenticating solely via auth_user_id + auth_p avoids this bug and succeeds.
+        """
+        if self._comment_session is None:
+            proxies = self._get_proxies_dict()
+            sess = requests.Session(
+                impersonate=self.fingerprint,
+                proxies=proxies
+            )
+            sess.headers.update(get_browser_headers(self.fingerprint))
+            for k, v in self.cookies.items():
+                if k == "auth_sess":
+                    continue
+                sess.cookies.set(k, v, domain="wvids.com")
+                sess.cookies.set(k, v, domain=".wvids.com")
+                sess.cookies.set(k, v)
+            self._comment_session = sess
+        return self._comment_session
+
     def reset_session(self):
         if self._session:
             try:
@@ -170,6 +195,12 @@ class WvidsClient:
             except Exception:
                 pass
             self._session = None
+        if self._comment_session:
+            try:
+                self._comment_session.close()
+            except Exception:
+                pass
+            self._comment_session = None
 
     def update_cookies(self, new_cookies: Dict[str, str]):
         self.cookies.update(new_cookies)
@@ -1155,4 +1186,162 @@ class WvidsClient:
             except Exception:
                 pass
         return False
+
+    async def get_new_videos(
+        self,
+        min_views: int = 0,
+        max_views: int = 0,
+        max_pages: int = 3,
+        stop_check: Optional[Any] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Scans pages of fresh videos (categories=videos) on wvids.com via /api/fetch_content.php.
+        Filters for videos (type == 1) with views >= min_views and views <= max_views (if max_views > 0).
+        """
+        session = self.get_session()
+        await human_jitter(0.2, 0.4)
+
+        matching_videos: List[Dict[str, Any]] = []
+        seen_fids = set()
+        cursor = None
+        page = 0
+
+        while True:
+            if stop_check and stop_check():
+                break
+
+            page += 1
+            if max_pages > 0 and page > max_pages:
+                break
+
+            url = f"{URL_FETCH_CONTENT}?categories=videos"
+            if cursor is not None:
+                url += f"&cursor={quote(json.dumps(cursor))}"
+
+            try:
+                res = session.get(
+                    url,
+                    headers={
+                        "Referer": "https://wvids.com/mov",
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    timeout=25
+                )
+                if res.status_code != 200:
+                    break
+
+                data = res.json()
+                raw_items = data.get("i", [])
+                has_more = bool(data.get("h", 0))
+                cursor = data.get("n")
+
+                if not raw_items:
+                    break
+
+                for it in raw_items:
+                    if not isinstance(it, list) or len(it) < 7:
+                        continue
+
+                    # it[0]: 1=video, 0=image
+                    if it[0] != 1:
+                        continue
+
+                    fid = str(it[1])
+                    if fid in seen_fids:
+                        continue
+                    seen_fids.add(fid)
+
+                    slug = str(it[2]) if len(it) > 2 else fid
+                    user_id = it[3] if len(it) > 3 else None
+                    duration = it[4] if len(it) > 4 else 0
+                    views = int(it[6]) if len(it) > 6 and it[6] is not None else 0
+                    comments = int(it[7]) if len(it) > 7 and it[7] is not None else 0
+                    title = str(it[8]).strip() if len(it) > 8 and it[8] else ""
+
+                    if views >= min_views:
+                        if max_views > 0 and views > max_views:
+                            continue
+                        video_obj = {
+                            "file_id": fid,
+                            "slug": slug,
+                            "title": title,
+                            "views": views,
+                            "comments": comments,
+                            "duration": duration,
+                            "user_id": user_id,
+                            "post_url": f"https://wvids.com/{slug}",
+                            "page": page
+                        }
+                        matching_videos.append(video_obj)
+
+                if not has_more or not cursor:
+                    break
+
+                await human_jitter(0.2, 0.4)
+            except Exception as e:
+                add_log("WARNING", f"Ошибка получения раздела свежих видео (стр. {page}): {e}")
+                break
+
+        return matching_videos
+
+    async def post_comment(
+        self,
+        fid: str,
+        msg: str,
+        slug: Optional[str] = None,
+        reply: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Posts a comment to wvids.com video via /api/comments.php?write.
+        """
+        session = self.get_comment_session()
+        await human_jitter(0.3, 0.6)
+
+        referer = f"https://wvids.com/{slug}" if slug else "https://wvids.com/"
+        headers = {
+            "Referer": referer,
+            "Origin": "https://wvids.com",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+        
+        body = f"msg={quote(msg)}&fid={quote(str(fid))}&reply={quote(str(reply))}"
+        
+        try:
+            res = session.post(
+                f"{DEFAULT_HOST}/api/comments.php?write",
+                data=body,
+                headers=headers,
+                timeout=25
+            )
+            
+            try:
+                data = res.json()
+            except Exception:
+                data = {"raw": res.text, "status_code": res.status_code}
+                
+            if res.status_code == 200 and data.get("success"):
+                add_log("SUCCESS", f"💬 Оставлен комментарий на видео {fid}: '{msg[:40]}'")
+                return {"success": True, "fid": fid, "msg": msg, "data": data}
+            else:
+                err = data.get("error") or data.get("message") or f"HTTP {res.status_code}"
+                add_log("WARNING", f"⚠️ Ответ сервера при отправке комментария на видео {fid}: {err}")
+                return {"success": False, "fid": fid, "error": err, "status_code": res.status_code}
+        except Exception as e:
+            err = f"Сетевой сбой при отправке комментария: {e}"
+            add_log("ERROR", err)
+            return {"success": False, "fid": fid, "error": err}
+
+def parse_spintax(text: str) -> str:
+    """Resolves nested or single {option1|option2|option3} spintax randomly."""
+    pattern = re.compile(r'\{([^{}]+)\}')
+    max_iter = 10
+    while max_iter > 0:
+        match = pattern.search(text)
+        if not match:
+            break
+        choices = match.group(1).split('|')
+        text = text[:match.start()] + random.choice(choices) + text[match.end():]
+        max_iter -= 1
+    return text
 

@@ -172,10 +172,10 @@ chmod +x setup_pm2.sh start.sh
 
 ### Управление через PM2:
 ```bash
-pm2 status legato-panel     # Проверить статус
-pm2 logs legato-panel       # Просмотр логов в реальном времени
-pm2 restart legato-panel    # Перезапустить панель
-pm2 stop legato-panel       # Остановить панель
+pm2 status legato     # Проверить статус
+pm2 logs legato       # Просмотр логов в реальном времени
+pm2 restart legato    # Перезапустить панель
+pm2 stop legato       # Остановить панель
 pm2 startup                 # Настроить запуск при старте системы
 ```
 

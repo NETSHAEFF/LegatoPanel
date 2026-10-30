@@ -21,11 +21,13 @@ document.addEventListener("DOMContentLoaded", () => {
     loadProcessingSettings();
     initProcessingStudio();
     initPopularDownloader();
+    initAutoCommenter();
     // Periodic refresh
     setInterval(loadTorStatus, 30000);
     setInterval(loadBatchStatus, 2500);
     setInterval(loadBulkRedactStatus, 2000);
     setInterval(loadPopularStatus, 2000);
+    setInterval(loadAutoCommenterStatus, 2500);
 });
 
 // --- Toast Notifications ---
@@ -50,6 +52,7 @@ const TAB_SECTION_NAMES = {
     "tab-processing": "Студия водяного знака",
     "tab-redact": "Пакетный редактор постов",
     "tab-popular": "Парсер Популярного",
+    "tab-autocomment": "Автокомментинг",
     "tab-antidetect": "Tor Сеть & Защита",
     "tab-auth": "Куки & Аккаунты",
     "tab-account": "Профиль & Никнейм",
@@ -119,6 +122,9 @@ function initTabs() {
                 if (target === "tab-popular") {
                     loadPopularStatus();
                     loadPopularFiles();
+                }
+                if (target === "tab-autocomment") {
+                    loadAutoCommenterStatus();
                 }
                 if (target === "tab-processing") {
                     updateLivePreview();
@@ -1851,6 +1857,261 @@ async function loadPopularFiles() {
         if (folderDisp) folderDisp.textContent = `${folder}/`;
     } catch (err) {
         // silent
+    }
+}
+
+// ==========================================================================
+// Auto-Commenter Module
+// ==========================================================================
+
+let isAutoCommentFormTouched = false;
+
+function initAutoCommenter() {
+    const btnStart = document.getElementById("btnStartAutoComment");
+    const btnStop = document.getElementById("btnStopAutoComment");
+    const btnSave = document.getElementById("btnSaveAutoCommentSettings");
+    const btnTest = document.getElementById("btnTestAutoComment");
+
+    if (btnStart) btnStart.addEventListener("click", startAutoCommenter);
+    if (btnStop) btnStop.addEventListener("click", stopAutoCommenter);
+    if (btnSave) btnSave.addEventListener("click", saveAutoCommenterSettings);
+    if (btnTest) btnTest.addEventListener("click", testAutoCommenterSingle);
+
+    // Track user input to prevent overwriting active typing
+    const inputs = ["acIntervalInput", "acDailyLimitInput", "acMinViewsInput", "acMaxViewsInput", "acTemplatesInput"];
+    inputs.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener("focus", () => { isAutoCommentFormTouched = true; });
+        }
+    });
+
+    loadAutoCommenterStatus();
+}
+
+async function loadAutoCommenterStatus() {
+    try {
+        const res = await fetch("/api/autocomment/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        const st = data.status;
+        if (!st) return;
+
+        // Status badges and buttons
+        const badge = document.getElementById("autoCommentStatusBadge");
+        const statusText = document.getElementById("autoCommentStatusText");
+        const timerText = document.getElementById("autoCommentTimerText");
+        const btnStart = document.getElementById("btnStartAutoComment");
+        const btnStop = document.getElementById("btnStopAutoComment");
+
+        if (st.is_running) {
+            if (badge) {
+                badge.textContent = "Работает";
+                badge.style.background = "rgba(0, 255, 204, 0.2)";
+                badge.style.color = "var(--accent-cyan)";
+                badge.style.border = "1px solid rgba(0, 255, 204, 0.3)";
+            }
+            if (btnStart) btnStart.style.display = "none";
+            if (btnStop) btnStop.style.display = "inline-flex";
+        } else {
+            if (badge) {
+                badge.textContent = "Остановлен";
+                badge.style.background = "rgba(255, 255, 255, 0.05)";
+                badge.style.color = "var(--text-muted)";
+                badge.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+            }
+            if (btnStart) btnStart.style.display = "inline-flex";
+            if (btnStop) btnStop.style.display = "none";
+        }
+
+        if (statusText) statusText.textContent = st.status_text || (st.is_running ? "В процессе..." : "Ожидание запуска");
+        if (timerText) {
+            if (st.is_running && st.time_to_next_seconds > 0) {
+                timerText.textContent = `через ${st.time_to_next_seconds} сек.`;
+            } else if (st.is_running) {
+                timerText.textContent = st.current_action || "Обработка...";
+            } else {
+                timerText.textContent = "—";
+            }
+        }
+
+        // Stats Cards
+        const statToday = document.getElementById("acStatToday");
+        const statTotal = document.getElementById("acStatTotal");
+        const statNext = document.getElementById("acStatNext");
+        const badgeToday = document.getElementById("acCommentedTodayBadge");
+
+        if (statToday) statToday.textContent = `${st.today_count} / ${st.daily_limit}`;
+        if (badgeToday) badgeToday.textContent = `Сегодня: ${st.today_count} / ${st.daily_limit}`;
+        if (statTotal) statTotal.textContent = `${st.unique_videos_commented} видео`;
+        if (statNext) {
+            if (st.is_running && st.time_to_next_seconds > 0) {
+                statNext.textContent = `${st.time_to_next_seconds}с`;
+            } else if (st.is_running) {
+                statNext.textContent = "сейчас";
+            } else {
+                statNext.textContent = "—";
+            }
+        }
+
+        // Fill form fields if user is not currently typing
+        if (!isAutoCommentFormTouched) {
+            const intervalInp = document.getElementById("acIntervalInput");
+            const dailyInp = document.getElementById("acDailyLimitInput");
+            const minViewsInp = document.getElementById("acMinViewsInput");
+            const maxViewsInp = document.getElementById("acMaxViewsInput");
+            const templatesInp = document.getElementById("acTemplatesInput");
+            const spintaxCb = document.getElementById("acSpintaxCheckbox");
+
+            if (intervalInp && !intervalInp.matches(":focus")) intervalInp.value = st.interval_minutes || 3;
+            if (dailyInp && !dailyInp.matches(":focus")) dailyInp.value = st.daily_limit || 30;
+            if (minViewsInp && !minViewsInp.matches(":focus")) minViewsInp.value = st.min_views || 50;
+            if (maxViewsInp && !maxViewsInp.matches(":focus")) maxViewsInp.value = st.max_views !== undefined ? st.max_views : 5000;
+            if (spintaxCb) spintaxCb.checked = st.enable_spintax !== false;
+            if (templatesInp && !templatesInp.matches(":focus") && Array.isArray(st.comment_templates)) {
+                templatesInp.value = st.comment_templates.join("\n");
+            }
+        }
+
+        renderAutoCommentHistory(st.history);
+    } catch (err) {
+        // silent
+    }
+}
+
+function renderAutoCommentHistory(history) {
+    const tableBody = document.getElementById("acHistoryTableBody");
+    if (!tableBody) return;
+
+    if (!history || history.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">История пока пуста. Комментарии появятся здесь после отправки.</td></tr>`;
+        return;
+    }
+
+    const rows = [...history].reverse().map(item => {
+        const isSuccess = item.status === "success";
+        const statusBadge = isSuccess
+            ? `<span style="color: #51cf66;" title="Успешно опубликован">✅</span>`
+            : `<span style="color: #ff6b6b;" title="${item.error || 'Ошибка'}">⚠️</span>`;
+
+        const titleSafe = (item.title || item.file_id || "Видео").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const commentSafe = (item.comment || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const viewsStr = (item.views || 0).toLocaleString();
+
+        return `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <td style="padding: 0.5rem; color: var(--text-muted); font-size: 0.72rem; font-family: monospace;">
+                    ${item.time_str || "—"}
+                </td>
+                <td style="padding: 0.5rem; font-weight: 500; color: var(--text-primary); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${statusBadge} ${titleSafe}
+                    <div style="font-size: 0.68rem; color: var(--text-muted);">FID: ${item.file_id}</div>
+                </td>
+                <td style="padding: 0.5rem; text-align: right; color: #ffaa00; font-weight: 600;">
+                    ${viewsStr}
+                </td>
+                <td style="padding: 0.5rem; color: var(--text-secondary); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${commentSafe}">
+                    ${commentSafe}
+                </td>
+                <td style="padding: 0.5rem; text-align: center;">
+                    <a href="${item.post_url}" target="_blank" style="color: var(--accent-cyan); text-decoration: none;" title="Открыть видео">↗</a>
+                </td>
+            </tr>
+        `;
+    }).join("");
+
+    tableBody.innerHTML = rows;
+}
+
+async function startAutoCommenter() {
+    await saveAutoCommenterSettings(false);
+    try {
+        const res = await fetch("/api/autocomment/start", { method: "POST" });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast(`🚀 ${data.message}`, "success");
+            loadAutoCommenterStatus();
+        } else {
+            showToast(data.detail || data.error || data.message || "Ошибка запуска", "error");
+        }
+    } catch (err) {
+        showToast("Сбой запуска: " + err.message, "error");
+    }
+}
+
+async function stopAutoCommenter() {
+    try {
+        const res = await fetch("/api/autocomment/stop", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("⏹️ Автокомментинг остановлен", "info");
+            loadAutoCommenterStatus();
+        }
+    } catch (err) {
+        showToast("Ошибка остановки: " + err.message, "error");
+    }
+}
+
+async function saveAutoCommenterSettings(notify = true) {
+    const intervalMins = parseFloat(document.getElementById("acIntervalInput")?.value || "3") || 3;
+    const dailyLimit = parseInt(document.getElementById("acDailyLimitInput")?.value || "30", 10) || 30;
+    const minViews = parseInt(document.getElementById("acMinViewsInput")?.value || "50", 10) || 50;
+    const maxViews = parseInt(document.getElementById("acMaxViewsInput")?.value || "5000", 10) || 0;
+    const templates = document.getElementById("acTemplatesInput")?.value || "";
+    const spintax = document.getElementById("acSpintaxCheckbox")?.checked !== false;
+
+    try {
+        const res = await fetch("/api/autocomment/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                interval_minutes: intervalMins,
+                daily_limit: dailyLimit,
+                min_views: minViews,
+                max_views: maxViews,
+                comment_templates: templates,
+                enable_spintax: spintax
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            isAutoCommentFormTouched = false;
+            if (notify) showToast("💾 Настройки автокомментинга сохранены", "success");
+        }
+    } catch (err) {
+        if (notify) showToast("Ошибка сохранения: " + err.message, "error");
+    }
+}
+
+async function testAutoCommenterSingle() {
+    const fidInput = document.getElementById("acTestFidInput");
+    const fid = fidInput?.value?.trim();
+    if (!fid) {
+        showToast("Введите ID видео (FID) для теста", "warning");
+        return;
+    }
+
+    const btn = document.getElementById("btnTestAutoComment");
+    if (btn) btn.disabled = true;
+
+    showToast(`Тестовая отправка на видео ${fid}...`, "info");
+    try {
+        const res = await fetch("/api/autocomment/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fid: fid })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast(`✅ Комментарий опубликован на видео ${fid}!`, "success");
+            loadAutoCommenterStatus();
+        } else {
+            showToast(`⚠️ Ошибка: ${data.detail || data.error || "Не удалось опубликовать"}`, "error");
+        }
+    } catch (err) {
+        showToast("Ошибка теста: " + err.message, "error");
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 

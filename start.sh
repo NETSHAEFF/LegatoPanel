@@ -12,15 +12,15 @@ mkdir -p data uploads videos logs
 # Check if PM2 is available
 if command -v pm2 >/dev/null 2>&1; then
     echo "[*] Запуск/перезапуск через PM2..."
-    if pm2 describe legato-panel >/dev/null 2>&1; then
-        pm2 restart legato-panel
+    if pm2 describe legato >/dev/null 2>&1; then
+        pm2 restart legato
     else
         pm2 start ecosystem.config.js
     fi
-    pm2 status legato-panel
+    pm2 status legato
     echo ""
     echo "[+] Панель активна в фоновом режиме!"
-    echo "    Смотреть логи: pm2 logs legato-panel"
+    echo "    Смотреть логи: pm2 logs legato"
     exit 0
 fi
 

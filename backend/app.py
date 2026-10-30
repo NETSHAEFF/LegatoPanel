@@ -27,6 +27,7 @@ from .uploader import ContentUploader
 from .batch_worker import batch_worker
 from .bulk_redactor import bulk_redactor
 from .popular_downloader import popular_downloader
+from .auto_commenter import auto_commenter
 from .tor import (
     check_tor_connection,
     auto_detect_tor_port,
@@ -721,6 +722,61 @@ async def get_downloaded_popular_files(folder: Optional[str] = "video"):
         "folder": str(p),
         "files": files,
         "total": len(files)
+    }
+
+# Auto-Commenter Endpoints
+class AutoCommenterSettingsRequest(BaseModel):
+    interval_seconds: Optional[int] = None
+    interval_minutes: Optional[float] = None
+    min_views: Optional[int] = None
+    max_views: Optional[int] = None
+    daily_limit: Optional[int] = None
+    comment_templates: Optional[Any] = None
+    enable_spintax: Optional[bool] = None
+
+class AutoCommenterTestRequest(BaseModel):
+    fid: str
+    text: Optional[str] = None
+
+@app.get("/api/autocomment/status")
+async def get_autocomment_status():
+    return {
+        "success": True,
+        "status": auto_commenter.get_status()
+    }
+
+@app.post("/api/autocomment/start")
+async def start_autocomment():
+    res = await auto_commenter.start()
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", res.get("message", "Не удалось запустить автокомментинг")))
+    return res
+
+@app.post("/api/autocomment/stop")
+async def stop_autocomment():
+    res = await auto_commenter.stop()
+    return res
+
+@app.post("/api/autocomment/settings")
+async def update_autocomment_settings(req: AutoCommenterSettingsRequest):
+    data = req.dict(exclude_unset=True)
+    res = auto_commenter.update_settings(data)
+    return res
+
+@app.post("/api/autocomment/test")
+async def test_autocomment(req: AutoCommenterTestRequest):
+    if not req.fid or not req.fid.strip():
+        raise HTTPException(status_code=400, detail="Не указан ID видео (FID)")
+    res = await auto_commenter.test_single_comment(fid=req.fid.strip(), text=req.text)
+    return res
+
+@app.get("/api/autocomment/preview_spintax")
+async def preview_spintax(text: str):
+    from .client import parse_spintax
+    return {
+        "success": True,
+        "original": text,
+        "parsed": parse_spintax(text)
     }
 
 # Tor Network Management

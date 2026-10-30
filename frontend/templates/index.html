@@ -88,6 +88,13 @@
                         <span>Парсер Популярного</span>
                         <span class="btn-badge" style="background: rgba(255, 107, 107, 0.2); color: #ff6b6b; border: 1px solid rgba(255, 107, 107, 0.3);">Top</span>
                     </button>
+                    <button class="tab-btn" data-tab="tab-autocomment">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>Автокомментинг</span>
+                        <span class="btn-badge" style="background: rgba(0, 255, 204, 0.2); color: var(--accent-cyan); border: 1px solid rgba(0, 255, 204, 0.3);">New</span>
+                    </button>
                 </div>
 
                 <!-- Group 2: Infrastructure & Protection -->
@@ -1603,6 +1610,183 @@
                                 <button class="btn btn-secondary btn-sm" id="btnRefreshPopFiles" style="padding: 0.3rem 0.6rem; font-size: 0.72rem;">
                                     🔄 Обновить список папки
                                 </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: AUTO COMMENTER -->
+                <section id="tab-autocomment" class="tab-content">
+                    <div class="grid-2">
+                        <!-- Left Column: Settings & Controls -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                    <span>Автокомментинг раздела «Новое»</span>
+                                </div>
+                                <div id="autoCommentStatusBadge" class="btn-badge" style="background: rgba(255, 255, 255, 0.05); color: var(--text-muted); padding: 0.25rem 0.6rem; border-radius: 4px;">
+                                    Остановлен
+                                </div>
+                            </div>
+
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1.2rem; line-height: 1.4;">
+                                Модуль автоматически находит свежие видео из раздела «Новое», фильтрует их по набранным просмотрам и с заданным интервалом случайно выбирает ролик для публикации вашего комментария без повторов.
+                            </p>
+
+                            <!-- Live Status Bar -->
+                            <div id="autoCommentLiveAlert" style="background: rgba(0, 255, 204, 0.06); border: 1px solid rgba(0, 255, 204, 0.15); border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-size: 0.75rem; color: var(--text-secondary);">Статус:</span>
+                                    <span id="autoCommentStatusText" style="font-size: 0.78rem; font-weight: 500; color: var(--accent-cyan);">Ожидание запуска</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.4rem;">
+                                    <span style="font-size: 0.72rem; color: var(--text-muted);">Следующее действие:</span>
+                                    <span id="autoCommentTimerText" style="font-size: 0.72rem; font-family: monospace; color: var(--text-primary);">—</span>
+                                </div>
+                            </div>
+
+                            <!-- Form Controls -->
+                            <div class="grid-2" style="gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        Интервал (минуты)
+                                        <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: normal;">(рандомный джиттер ±25с)</span>
+                                    </label>
+                                    <input type="number" class="form-input" id="acIntervalInput" value="3" min="0.5" step="0.5">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        Дневной лимит комментариев
+                                        <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: normal;">(защита от блокировки)</span>
+                                    </label>
+                                    <input type="number" class="form-input" id="acDailyLimitInput" value="30" min="1" step="5">
+                                </div>
+                            </div>
+
+                            <div class="grid-2" style="gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        Мин. просмотров (фильтр)
+                                        <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: normal;">(пропускать видео с &lt; N)</span>
+                                    </label>
+                                    <input type="number" class="form-input" id="acMinViewsInput" value="50" min="0" step="10">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        Макс. просмотров
+                                        <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: normal;">(0 = без ограничения)</span>
+                                    </label>
+                                    <input type="number" class="form-input" id="acMaxViewsInput" value="5000" min="0" step="100">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                                    <label class="form-label" style="margin-bottom: 0;">
+                                        Шаблоны комментариев
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--accent-cyan); cursor: pointer;">
+                                        <input type="checkbox" id="acSpintaxCheckbox" checked style="accent-color: var(--accent-cyan);">
+                                        Spintax <code>{A|B|C}</code>
+                                    </label>
+                                </div>
+                                <textarea class="form-input" id="acTemplatesInput" rows="5" placeholder="Один комментарий на строку. Поддерживается {вариант1|вариант2}.&#10;Пример:&#10;{Огонь|Супер|Круто}! 🔥 Больше видео в профиле&#10;{Шикарный|Отличный} ролик! {Загляни|Переходи} на страницу"></textarea>
+                                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.3rem;">
+                                    Каждый раз случайным образом выбирается одна строка и преобразуются синонимы.
+                                </div>
+                            </div>
+
+                            <!-- Buttons -->
+                            <div style="display: flex; gap: 0.6rem; align-items: center; margin-top: 1.25rem;">
+                                <button class="btn btn-primary" id="btnStartAutoComment" style="flex: 1; padding: 0.65rem 1rem;">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                    </svg>
+                                    Запустить автокомментинг
+                                </button>
+                                <button class="btn btn-danger" id="btnStopAutoComment" style="display: none; flex: 1; padding: 0.65rem 1rem;">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                                        <rect x="6" y="6" width="12" height="12"></rect>
+                                    </svg>
+                                    Остановить
+                                </button>
+                                <button class="btn btn-secondary" id="btnSaveAutoCommentSettings" style="padding: 0.65rem 1rem;">
+                                    💾 Сохранить
+                                </button>
+                            </div>
+
+                            <!-- Test Tool -->
+                            <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(255, 255, 255, 0.06);">
+                                <label class="form-label" style="font-size: 0.75rem; color: var(--text-muted);">
+                                    🧪 Ручной тест публикации на конкретное видео (по FID):
+                                </label>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <input type="text" class="form-input" id="acTestFidInput" placeholder="Например: 9526094" style="flex: 1; font-size: 0.8rem; padding: 0.4rem 0.6rem;">
+                                    <button class="btn btn-secondary btn-sm" id="btnTestAutoComment" style="white-space: nowrap; font-size: 0.75rem; padding: 0.4rem 0.8rem;">
+                                        Отправить тест
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Stats & Recent Comments Table -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                                    </svg>
+                                    <span>Журнал комментариев</span>
+                                </div>
+                                <span class="badge" id="acCommentedTodayBadge" style="background: rgba(0, 255, 204, 0.15); color: var(--accent-cyan); border: 1px solid rgba(0, 255, 204, 0.3);">
+                                    Сегодня: 0
+                                </span>
+                            </div>
+
+                            <!-- Stat Mini Cards -->
+                            <div class="grid-3" style="gap: 0.5rem; margin-bottom: 1rem;">
+                                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 0.6rem; text-align: center;">
+                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">Сегодня</div>
+                                    <div id="acStatToday" style="font-size: 1.15rem; font-weight: bold; color: var(--accent-cyan); margin-top: 0.2rem;">0 / 30</div>
+                                </div>
+                                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 0.6rem; text-align: center;">
+                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">Всего видео в базе</div>
+                                    <div id="acStatTotal" style="font-size: 1.15rem; font-weight: bold; color: #ffaa00; margin-top: 0.2rem;">0</div>
+                                </div>
+                                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 0.6rem; text-align: center;">
+                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">Следующий через</div>
+                                    <div id="acStatNext" style="font-size: 1.15rem; font-weight: bold; color: #a0a0ff; margin-top: 0.2rem;">—</div>
+                                </div>
+                            </div>
+
+                            <!-- Comments History Table -->
+                            <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+                                <table class="table" style="width: 100%; font-size: 0.78rem;">
+                                    <thead>
+                                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--text-muted);">
+                                            <th style="padding: 0.5rem; text-align: left; width: 65px;">Время</th>
+                                            <th style="padding: 0.5rem; text-align: left;">Видео</th>
+                                            <th style="padding: 0.5rem; text-align: right; width: 75px;">Просм.</th>
+                                            <th style="padding: 0.5rem; text-align: left;">Текст комментария</th>
+                                            <th style="padding: 0.5rem; text-align: center; width: 45px;">URL</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="acHistoryTableBody">
+                                        <tr>
+                                            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2.5rem;">
+                                                История комментариев пуста. Нажмите «Запустить автокомментинг».
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
