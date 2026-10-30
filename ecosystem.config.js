@@ -18,7 +18,7 @@ if (!fs.existsSync(logsDir)) {
 module.exports = {
   apps: [
     {
-      name: 'legato-panel',
+      name: 'legato',
       script: 'run_panel.py',
       cwd: __dirname,
       interpreter: pythonInterpreter,
